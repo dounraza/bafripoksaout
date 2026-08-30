@@ -52,7 +52,7 @@ app.use(express.json({ extended: false }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/auth/admin", authAdminRoutes);
-app.use("/api", soldeRoutes);
+app.use("/api/solde", soldeRoutes); // Specific route for public solde access
 app.use("/api", protect, soldeAdminRoutes);
 app.use("/api/depot", protect, depotMobileRoutes);
 app.use("/api/depot", protect, depotCryptoRoutes);

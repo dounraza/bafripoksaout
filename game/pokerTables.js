@@ -147,9 +147,12 @@ class PokerTable {
                 const { updatedStacks, detailedWinners } = await this.distributeWinnings(preShowdownStacks, combined, activeHands, orphanPots, mainWinners);
                 table.showdown();
                 pokerTable.isShowDownInProgress = true;
-                await pokerTable.replacePlayer(updatedStacks);
     
                 const winStates = table.seats().map((seat, index) => {
+                    // Only assign a state if the seat is occupied
+                    if (seat === null) {
+                        return { seat: index, handName: null, isWinner: false };
+                    }
                     return {
                         seat: index,
                         handName: !(pokerTable.foldedPlayers.size + 1 === pokerTable.activePlayers) ? 'Lose': 'all fold',
@@ -167,12 +170,6 @@ class PokerTable {
                 for (const player of this.players.values()) {
                     if (player.seatIndex !== undefined) {
                         playerNames[player.seatIndex] = player.user.name;
-                        const solde = await Soldes.findOne({ where: { userId: player.user.id } });
-                        const cave = this.caves.get(player.user.id);
-                        const stack = updatedStacks[player.seatIndex];
-                        solde.montant = Number(solde.montant) - Number(cave) + Number(stack);
-                        await solde.save();
-                        this.caves.set(player.user.id, stack);
                     }
                 }
                     
@@ -190,6 +187,8 @@ class PokerTable {
                     console.error("❌ Erreur lors de l’enregistrement de l’historique :", error);
                 }
     
+                // ... mise à jour de l'historique fait juste avant ...
+                
                 const result = {
                     allCards: !(pokerTable.foldedPlayers.size + 1 === pokerTable.activePlayers) ? allCards : [],
                     winStates: winStates,
@@ -197,7 +196,25 @@ class PokerTable {
                 }
                     
                 pokerTable.broadcastWin(result);
-                pokerTable.broadcastState();
+                
+                // Différer la mise à jour des soldes et l'affichage des nouveaux stacks
+                setTimeout(async () => {
+                    // Mettre à jour les stacks réels de la table après l'animation
+                    await pokerTable.replacePlayer(updatedStacks);
+
+                    for (const player of this.players.values()) {
+                        if (player.seatIndex !== undefined) {
+                            const solde = await Soldes.findOne({ where: { userId: player.user.id } });
+                            const cave = this.caves.get(player.user.id);
+                            const stack = updatedStacks[player.seatIndex];
+                            solde.montant = Number(solde.montant) - Number(cave) + Number(stack);
+                            await solde.save();
+                            this.caves.set(player.user.id, stack);
+                        }
+                    }
+                    // Déplacé ici : le client ne recevra l'info qu'après 4s
+                    pokerTable.broadcastState(); 
+                }, 4000);
     
                 pokerTable.foldedPlayers = new Set();
                 
@@ -490,7 +507,7 @@ class PokerTable {
                     if(stack && stack > 0) {
                         this.table.sitDown(player.seatIndex, stack);
                     } else {
-                        this.removedPlayers.set(player.seatIndex, player);
+                        this.table.sitDown(player.seatIndex, 0);
                     }
                 } catch (err) {
                     console.error('[REPLACE PLAYER] ERR seat', player.seatIndex, err);
@@ -553,6 +570,28 @@ class PokerTable {
             return;
         }
 
+        // --- NEW CHECK: Prevent 1v1 if a player has 0 stack ---
+        const seats = this.table.seats() || [];
+        const activePlayers = seats.filter(s => s !== null && s.stack > 0);
+        if (this.seatTaken.size === 2 && activePlayers.length < 2) {
+            console.log(`[TABLE ${this.tableInfo.id}] Cannot start 1v1 hand: a player has 0 stack.`);
+            
+            // Identifier le joueur à 0
+            const zeroStackPlayerIndex = seats.findIndex(s => s !== null && s.stack === 0);
+            if (zeroStackPlayerIndex !== -1) {
+            for (const player of this.players.values()) {
+            if (player.seatIndex === zeroStackPlayerIndex) {
+                player.send('needRecave', { message: 'Votre tapis est vide, veuillez recaver pour continuer.' });
+                console.log(`[TABLE ${this.tableInfo.id}] Joueur ${player.user.id} a 0 tapis, suppression automatique.`);
+                await this.removePlayer(player.socketio.id);
+                player.send("quitsuccess", { tableId: this.tableInfo.id });
+            }
+            }
+            }
+            return; // Bloque le démarrage
+        }
+        // -----------------------------------------------------
+
         try {
             const latestTable = await Table.findByPk(this.tableInfo.id);
             if (latestTable) {
@@ -574,7 +613,6 @@ class PokerTable {
             this.manualPots[this.roundIndex] = [];
         }
 
-        const seats = this.table.seats() || [];
         for(let i = 0; i < seats.length; i++) {
             if(seats[i]) {
                 this.manualPots[this.roundIndex].push({seatIndex: i, betSize: seats[i].betSize});
@@ -739,13 +777,15 @@ class PokerTable {
                     const stillToAct = this.table.playerToAct();
                     if (toAct === stillToAct) {
                         const player = this.getPlayer(stillToAct);
-                        const action = this.table.legalActions().actions.includes('check') ? 'check' : 'fold';
-                        await this.playerAction(player?.socketio ?? null, stillToAct, action, 0, disconnectedPlayers);
+                        if (player) {
+                            console.log(`⏳ Joueur ${player.user.id} inactif, suppression de la table.`);
+                            await this.removePlayer(player.socketio.id);
+                        }
                     }
                 } catch (error) {
-                    console.error('[AUTOFOLD TIMER] ERR', error);
+                    console.error('[TIMEOUT EXIT TIMER] ERR', error);
                 }
-            }, 12000);
+            }, 10000);
         }
     }
 
@@ -868,11 +908,15 @@ class PokerTable {
                     playerNames,
                     playerIds,
                     actions: this.currentRoundActions,
-                    playerCards: this.holeCards[seatIndex],
+                    // Ensure always 2 cards (or nulls) for consistency across 9 seats
+                    playerCards: this.holeCards[seatIndex] && this.holeCards[seatIndex].length >= 2 
+                        ? this.holeCards[seatIndex].slice(0, 2) 
+                        : [null, null],
                     legalActions: handInProgress && seatIndex === toAct ? this.table.legalActions() : [],
                     pots,
                     avatars: this.avatars,
                 };
+                console.log(`[DEBUG broadcastState] Seats stack:`, data.seats.map(s => s?.stack));
                 player.send('tableState', data);
                 if(isStart && toAct !== null && toAct !== undefined) this.startAutoFoldTimer(toAct);
             } catch (error) {
