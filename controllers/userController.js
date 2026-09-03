@@ -3,6 +3,8 @@ const path = require('path');
 const User = require("../model/User");
 const asyncHandler = require("express-async-handler");
 const generateToken = require('../config/generateToken');
+const { sendResetCode } = require('../utils/emailService');
+const { Op } = require('sequelize');
 
 exports.getAvatar = asyncHandler(async (req, res) => {
     const { userId } = req.params;
@@ -106,6 +108,47 @@ exports.register = asyncHandler(async (req, res) => {
             message: 'Une erreur est survenue lors de l\'inscription' 
         });
     }
+});
+
+exports.forgotPassword = asyncHandler(async (req, res) => {
+    const { email } = req.body;
+    const user = await User.findOne({ where: { email } });
+    if (!user) {
+        return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+    }
+
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    user.reset_code = code;
+    user.reset_code_expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    await user.save();
+
+    await sendResetCode(email, code);
+
+    res.json({ success: true, message: 'Code envoyé par email' });
+});
+
+exports.verifyCode = asyncHandler(async (req, res) => {
+    const { email, code } = req.body;
+    const user = await User.findOne({ where: { email, reset_code: code, reset_code_expires: { [Op.gt]: new Date() } } });
+    if (!user) {
+        return res.status(400).json({ success: false, message: 'Code invalide ou expiré' });
+    }
+    res.json({ success: true, message: 'Code vérifié' });
+});
+
+exports.resetPassword = asyncHandler(async (req, res) => {
+    const { email, code, password } = req.body;
+    const user = await User.findOne({ where: { email, reset_code: code, reset_code_expires: { [Op.gt]: new Date() } } });
+    if (!user) {
+        return res.status(400).json({ success: false, message: 'Code invalide ou expiré' });
+    }
+
+    user.password = password; // The hook in User.js will hash it
+    user.reset_code = null;
+    user.reset_code_expires = null;
+    await user.save();
+
+    res.json({ success: true, message: 'Mot de passe réinitialisé' });
 });
 
 exports.findByPseudo = asyncHandler(async (req, res)=> {

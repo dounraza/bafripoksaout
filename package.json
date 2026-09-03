@@ -21,6 +21,7 @@
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
     "mysql2": "^3.14.1",
+    "nodemailer": "^9.1.1",
     "nodemon": "^3.1.10",
     "poker-ts": "^1.4.1",
     "pokersolver": "^2.1.4",
