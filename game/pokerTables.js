@@ -17,910 +17,2762 @@ class PokerTable {
         this.players = new Map();
         this.seatTaken = new Set();
         this.maxSeats = 9;
+
         this.table = new Poker.Table({
             ante: 0,
             smallBlind: tableInfo.smallBlind,
             bigBlind: tableInfo.bigBlind
-        });    
+        });
+
         this.tableInfo = tableInfo;
         this.gameType = tableInfo.gameType || 'holdem';
         this.id = crypto.randomUUID();
+
         this.currentRoundActions = [];
         this.foldedPlayers = new Set();
         this.activePlayers = 0;
         this.lastPots = [];
         this.autoFoldTimeout = null;
+
         this.holeCards = [];
         this.holeCardsToShow = [];
-        this.omahaCommunityCards = null; // Store pre-dealt community cards for Omaha
+
+        this.omahaCommunityCards = null;
+
         this.manualPots = [];
         this.roundIndex = 0;
         this.playerInHandInitial = new Set();
+
         this.lastActPlayer = null;
         this.quitImmediately = [];
         this.removedPlayers = new Map();
+
         this.isShowDownInProgress = false;
-        
+
         this.caves = new Map();
+
         this.avatarsMaxNb = 19;
         this.avatars = [];
 
-        this.disconnectTimers = new Map(); // Map to hold disconnect timers for each player (userId -> timeoutId)
+        this.disconnectTimers = new Map();
     }
 
     handleDisconnect(userId, socketId) {
         try {
-            if (this.disconnectTimers.has(Number(userId))) return;
+            if (this.disconnectTimers.has(Number(userId))) {
+                return;
+            }
+
             const player = this.players.get(socketId);
+
             const timeoutId = setTimeout(async () => {
-                const idlePlayers = idlePlayersMap.get(this.tableInfo.id) || [];
+                const idlePlayers =
+                    idlePlayersMap.get(this.tableInfo.id) || [];
+
                 if (!idlePlayers.find(id => id !== player.user.id)) {
                     idlePlayers.push(player.user.id);
                 }
-                idlePlayersMap.set(this.tableInfo.id, idlePlayers);
-            }, 30 * 60 * 1000); // 30 minutes
+
+                idlePlayersMap.set(
+                    this.tableInfo.id,
+                    idlePlayers
+                );
+            }, 30 * 60 * 1000);
+
             this.disconnectTimers.set(userId, timeoutId);
+
         } catch (err) {
-            console.error('[DISCONNECT] Error handling disconnect for user:', userId, err);
+            console.error(
+                '[DISCONNECT] Error handling disconnect for user:',
+                userId,
+                err
+            );
         }
     }
 
     handleReconnect(userId) {
         const timeoutId = this.disconnectTimers.get(userId);
+
         if (timeoutId) {
             clearTimeout(timeoutId);
             this.disconnectTimers.delete(userId);
-            let idlePlayers = idlePlayersMap.get(this.tableInfo.id) || [];
-            idlePlayers = idlePlayers.filter(id => id !== userId);
-            idlePlayersMap.set(this.tableInfo.id, idlePlayers);
+
+            let idlePlayers =
+                idlePlayersMap.get(this.tableInfo.id) || [];
+
+            idlePlayers = idlePlayers.filter(
+                id => id !== userId
+            );
+
+            idlePlayersMap.set(
+                this.tableInfo.id,
+                idlePlayers
+            );
         }
     }
-    
+
     async endGame() {
         try {
             const table = this.table;
             const pokerTable = this;
             const tableSessionId = this.id;
+
             let completeCard = false;
-            
+
             if (table.areBettingRoundsCompleted()) {
-                const preShowdownStacks = table.seats().map(seat => seat?.stack ?? 0);
-                let comms = table.communityCards().map(c => `${c.rank}${c.suit[0]}`);
-                
-                // For Omaha, use the pre-dealt cards to ensure no duplicates
-                if (this.gameType === 'omaha' && this.omahaCommunityCards) {
+
+                // -------------------------------------------------
+                // STACKS AVANT SHOWDOWN
+                // -------------------------------------------------
+
+                const preShowdownStacks = table
+                    .seats()
+                    .map(seat => seat?.stack ?? 0);
+
+                let comms = table
+                    .communityCards()
+                    .map(c => `${c.rank}${c.suit[0]}`);
+
+                // -------------------------------------------------
+                // OMAHA : utiliser les cartes pré-distribuées
+                // -------------------------------------------------
+
+                if (
+                    this.gameType === 'omaha' &&
+                    this.omahaCommunityCards
+                ) {
                     if (pokerTable.countActivePlayers() > 1) {
                         comms = this.omahaCommunityCards;
                     } else {
-                        comms = this.omahaCommunityCards.slice(0, comms.length);
+                        comms = this.omahaCommunityCards.slice(
+                            0,
+                            comms.length
+                        );
                     }
                 }
-    
-                if(pokerTable.countActivePlayers() > 1 && comms.length < 5) {
+
+                if (
+                    pokerTable.countActivePlayers() > 1 &&
+                    comms.length < 5
+                ) {
                     completeCard = true;
                 }
-                    
-                const communityCard = utilCompletion.completeToFiveCards(comms, pokerTable.holeCards, completeCard);
-    
-                const holdeCards = pokerTable.holeCardsToShow;
-                const activeHands = holdeCards.map((hole, index) => {
-                    if (hole == null|| hole.length === 0) return null;
-                    if(pokerTable.foldedPlayers.has(index)) return null;
-    
-                    let hand;
-                    if (pokerTable.gameType === 'omaha') {
-                        // console.log("[DEBUG] Omaha hand evaluation:", { hole, communityCard });
-                        hand = solveOmahaHand(hole, communityCard);
-                        if (!hand && pokerTable.countActivePlayers() === 1) {
-                            hand = {
-                                playerIndex: index,
-                                descr: 'win',
-                                rank: 0,
-                                // Add placeholder methods to prevent TypeErrors
-                                qualifiesHigh: () => true,
-                                loseTo: () => false, // Assuming it should not lose if it's the only hand
-                                compare: (otherHand) => {
-                                    if (this.rank === otherHand.rank) return 0;
-                                    return this.rank > otherHand.rank ? 1 : -1;
-                                }
+
+                const communityCard =
+                    utilCompletion.completeToFiveCards(
+                        comms,
+                        pokerTable.holeCards,
+                        completeCard
+                    );
+
+                // -------------------------------------------------
+                // EVALUATION DES MAINS
+                // -------------------------------------------------
+
+                const holdeCards =
+                    pokerTable.holeCardsToShow;
+
+                const activeHands = holdeCards
+                    .map((hole, index) => {
+
+                        if (
+                            hole == null ||
+                            hole.length === 0
+                        ) {
+                            return null;
+                        }
+
+                        if (
+                            pokerTable.foldedPlayers.has(index)
+                        ) {
+                            return null;
+                        }
+
+                        let hand;
+
+                        if (pokerTable.gameType === 'omaha') {
+
+                            hand = solveOmahaHand(
+                                hole,
+                                communityCard
+                            );
+
+                            // Si un seul joueur reste
+                            if (
+                                !hand &&
+                                pokerTable.countActivePlayers() === 1
+                            ) {
+                                hand = {
+                                    playerIndex: index,
+                                    descr: 'win',
+                                    rank: 0,
+
+                                    qualifiesHigh: () => true,
+
+                                    loseTo: () => false,
+
+                                    compare: (otherHand) => {
+                                        if (
+                                            this.rank ===
+                                            otherHand.rank
+                                        ) {
+                                            return 0;
+                                        }
+
+                                        return this.rank >
+                                            otherHand.rank
+                                            ? 1
+                                            : -1;
+                                    }
+                                };
+                            }
+
+                        } else {
+
+                            const fullCards = [
+                                ...hole,
+                                ...communityCard
+                            ];
+
+                            hand =
+                                pokerHandSolver.solve(
+                                    fullCards
+                                );
+                        }
+
+                        if (hand) {
+                            hand.playerIndex = index;
+                        }
+
+                        return hand;
+
+                    })
+                    .filter(h => h !== null);
+
+                // -------------------------------------------------
+                // CARTES A AFFICHER AU SHOWDOWN
+                // -------------------------------------------------
+
+                const allCards = holdeCards.map(
+                    (card, index) => {
+
+                        if (
+                            card === null ||
+                            card.length === 0
+                        ) {
+                            return [];
+                        }
+
+                        if (
+                            pokerTable.foldedPlayers.has(index)
+                        ) {
+                            return [];
+                        }
+
+                        return card;
+                    }
+                );
+
+                // -------------------------------------------------
+                // WINNERS
+                // -------------------------------------------------
+
+                const pkwinners =
+                    pokerHandSolver.winners(
+                        activeHands
+                    );
+
+                const mainWinners =
+                    pkwinners.map(
+                        w => w.playerIndex
+                    );
+
+                // -------------------------------------------------
+                // POTS
+                // -------------------------------------------------
+
+                const {
+                    combined,
+                    orphanPots
+                } = pokerTable.restorePots();
+
+                const {
+                    updatedStacks,
+                    detailedWinners
+                } =
+                    await this.distributeWinnings(
+                        preShowdownStacks,
+                        combined,
+                        activeHands,
+                        orphanPots,
+                        mainWinners
+                    );
+
+                // -------------------------------------------------
+                // SHOWDOWN
+                // -------------------------------------------------
+
+                table.showdown();
+
+                pokerTable.isShowDownInProgress = true;
+
+                // -------------------------------------------------
+                // IMPORTANT :
+                // Mise à jour immédiate des stacks
+                // Le joueur avec 0 reste assis
+                // -------------------------------------------------
+
+                await pokerTable.replacePlayer(
+                    updatedStacks
+                );
+
+                // -------------------------------------------------
+                // WIN STATES
+                // -------------------------------------------------
+
+                const winStates = table
+                    .seats()
+                    .map((seat, index) => {
+
+                        // Siège vide
+                        if (seat === null) {
+                            return {
+                                seat: index,
+                                handName: null,
+                                isWinner: false
                             };
                         }
-                    } else {
-                        const fullCards = [...hole, ...communityCard];
-                        hand = pokerHandSolver.solve(fullCards);
-                    }
-                    
-                    if (hand) hand.playerIndex = index;
-                    return hand;
-                }).filter(h => h !== null);
-    
-                const allCards = holdeCards.map((card, index) => {
-                    if(card === null || card.length === 0) return [];
-                    if(pokerTable.foldedPlayers.has(index)) return [];
-                    return card;
-                });
-    
-                const pkwinners = pokerHandSolver.winners(activeHands);
-                const mainWinners = pkwinners.map(w => w.playerIndex);
-                 
-                const {combined, orphanPots} = pokerTable.restorePots();
-                const { updatedStacks, detailedWinners } = await this.distributeWinnings(preShowdownStacks, combined, activeHands, orphanPots, mainWinners);
-                table.showdown();
-                pokerTable.isShowDownInProgress = true;
-    
-                const winStates = table.seats().map((seat, index) => {
-                    // Only assign a state if the seat is occupied
-                    if (seat === null) {
-                        return { seat: index, handName: null, isWinner: false };
-                    }
-                    return {
-                        seat: index,
-                        handName: !(pokerTable.foldedPlayers.size + 1 === pokerTable.activePlayers) ? 'Lose': 'all fold',
-                        isWinner: false
-                    };
-                });
-                
-                detailedWinners.forEach((winner) => {
-                    const index = winner.playerIndex;
-                    winStates[index].handName = !(pokerTable.foldedPlayers.size + 1 === pokerTable.activePlayers) ? winner.descr: 'win';
-                    winStates[index].isWinner = true;
-                });
-    
-                const playerNames = Array(this.maxSeats).fill(null);
-                for (const player of this.players.values()) {
-                    if (player.seatIndex !== undefined) {
-                        playerNames[player.seatIndex] = player.user.name;
-                    }
-                }
-                    
-                const data = pokerTable.prepareHistoriqueMain(communityCard, pokerTable.holeCards, pokerTable.foldedPlayers, detailedWinners, playerNames);
-                    
-                try {
-                    await HistoriqueMain.create({
-                        table_name: data.table_name,
-                        cartes_communaute: data.cartes_communaute,
-                        main_joueurs: data.main_joueurs,
-                        foldes: data.foldes,
-                        gagnants: data.gagnants
+
+                        return {
+                            seat: index,
+
+                            handName:
+                                !(
+                                    pokerTable.foldedPlayers.size + 1 ===
+                                    pokerTable.activePlayers
+                                )
+                                    ? 'Lose'
+                                    : 'all fold',
+
+                            isWinner: false
+                        };
                     });
+
+                // -------------------------------------------------
+                // APPLIQUER LES WINNERS
+                // -------------------------------------------------
+
+                detailedWinners.forEach(
+                    (winner) => {
+
+                        const index =
+                            winner.playerIndex;
+
+                        if (!winStates[index]) {
+                            return;
+                        }
+
+                        winStates[index].handName =
+                            !(
+                                pokerTable.foldedPlayers.size + 1 ===
+                                pokerTable.activePlayers
+                            )
+                                ? winner.descr
+                                : 'win';
+
+                        winStates[index].isWinner =
+                            true;
+                    }
+                );
+
+                // -------------------------------------------------
+                // NOMS DES JOUEURS
+                // -------------------------------------------------
+
+                const playerNames =
+                    Array(this.maxSeats).fill(null);
+
+                for (
+                    const player
+                    of this.players.values()
+                ) {
+
+                    if (
+                        player.seatIndex !== undefined
+                    ) {
+
+                        playerNames[
+                            player.seatIndex
+                        ] = player.user.name;
+
+                        // -------------------------------------------------
+                        // MISE A JOUR DU SOLDE REEL
+                        // -------------------------------------------------
+
+                        try {
+
+                            const solde =
+                                await Soldes.findOne({
+                                    where: {
+                                        userId:
+                                            player.user.id
+                                    }
+                                });
+
+                            if (solde) {
+
+                                const cave =
+                                    this.caves.get(
+                                        player.user.id
+                                    ) ?? 0;
+
+                                const stack =
+                                    updatedStacks[
+                                        player.seatIndex
+                                    ] ?? 0;
+
+                                solde.montant =
+                                    Number(
+                                        solde.montant
+                                    )
+                                    - Number(cave)
+                                    + Number(stack);
+
+                                await solde.save();
+
+                                this.caves.set(
+                                    player.user.id,
+                                    stack
+                                );
+                            }
+
+                        } catch (err) {
+
+                            console.error(
+                                '[END GAME] Error updating balance:',
+                                err
+                            );
+                        }
+                    }
+                }
+
+                // -------------------------------------------------
+                // HISTORIQUE
+                // -------------------------------------------------
+
+                const data =
+                    pokerTable.prepareHistoriqueMain(
+                        communityCard,
+                        pokerTable.holeCards,
+                        pokerTable.foldedPlayers,
+                        detailedWinners,
+                        playerNames
+                    );
+
+                try {
+
+                    await HistoriqueMain.create({
+                        table_name:
+                            data.table_name,
+
+                        cartes_communaute:
+                            data.cartes_communaute,
+
+                        main_joueurs:
+                            data.main_joueurs,
+
+                        foldes:
+                            data.foldes,
+
+                        gagnants:
+                            data.gagnants
+                    });
+
                 } catch (error) {
-                    console.error("❌ Erreur lors de l’enregistrement de l’historique :", error);
+
+                    console.error(
+                        "❌ Erreur lors de l’enregistrement de l’historique :",
+                        error
+                    );
                 }
-    
-                // ... mise à jour de l'historique fait juste avant ...
-                
+
+                // -------------------------------------------------
+                // RESULTAT DU SHOWDOWN
+                // -------------------------------------------------
+
                 const result = {
-                    allCards: !(pokerTable.foldedPlayers.size + 1 === pokerTable.activePlayers) ? allCards : [],
-                    winStates: winStates,
-                    communityCards: communityCard
-                }
-                    
+
+                    allCards:
+                        !(
+                            pokerTable.foldedPlayers.size + 1 ===
+                            pokerTable.activePlayers
+                        )
+                            ? allCards
+                            : [],
+
+                    winStates,
+
+                    communityCards:
+                        communityCard
+                };
+
+                // -------------------------------------------------
+                // ENVOI IMMEDIAT
+                // -------------------------------------------------
+
                 pokerTable.broadcastWin(result);
-                
-                // Différer la mise à jour des soldes et l'affichage des nouveaux stacks
-                setTimeout(async () => {
-                    // Mettre à jour les stacks réels de la table après l'animation
-                    await pokerTable.replacePlayer(updatedStacks);
 
-                    for (const player of this.players.values()) {
-                        if (player.seatIndex !== undefined) {
-                            const solde = await Soldes.findOne({ where: { userId: player.user.id } });
-                            const cave = this.caves.get(player.user.id);
-                            const stack = updatedStacks[player.seatIndex];
-                            solde.montant = Number(solde.montant) - Number(cave) + Number(stack);
-                            await solde.save();
-                            this.caves.set(player.user.id, stack);
-                        }
-                    }
-                    // Déplacé ici : le client ne recevra l'info qu'après 4s
-                    pokerTable.broadcastState(); 
-                }, 4000);
-    
-                pokerTable.foldedPlayers = new Set();
-                
-                for(const player of pokerTable.removedPlayers.values()) {
-                    this.removePlayer(player.socketio.id);
+                pokerTable.broadcastState();
+
+                // -------------------------------------------------
+                // RESET DES FOLDS
+                // -------------------------------------------------
+
+                pokerTable.foldedPlayers =
+                    new Set();
+
+                // -------------------------------------------------
+                // JOUEURS A SUPPRIMER
+                // -------------------------------------------------
+
+                for (
+                    const player
+                    of pokerTable.removedPlayers.values()
+                ) {
+
+                    this.removePlayer(
+                        player.socketio.id
+                    );
                 }
 
-                for (const player of this.players.values()) {
-                    if (idlePlayersMap.get(this.tableInfo.id)?.find(id => id === player.user.id)) {
-                        this.removePlayer(player.socketio.id);
+                for (
+                    const player
+                    of this.players.values()
+                ) {
+
+                    if (
+                        idlePlayersMap
+                            .get(this.tableInfo.id)
+                            ?.find(
+                                id =>
+                                    id === player.user.id
+                            )
+                    ) {
+
+                        this.removePlayer(
+                            player.socketio.id
+                        );
                     }
                 }
-                
+
+                // -------------------------------------------------
+                // QUIT SUCCESS
+                // -------------------------------------------------
+
                 setTimeout(() => {
-                    for(const player of pokerTable.removedPlayers.values()) {
-                        player.send("quitsuccess", {});
+
+                    for (
+                        const player
+                        of pokerTable.removedPlayers.values()
+                    ) {
+
+                        player.send(
+                            "quitsuccess",
+                            {}
+                        );
                     }
-                    for (const player of this.players.values()) {
-                        if (idlePlayersMap.get(this.tableInfo.id)?.find(id => id === player.user.id)) {
-                            player.send('quitsuccess', {});
+
+                    for (
+                        const player
+                        of this.players.values()
+                    ) {
+
+                        if (
+                            idlePlayersMap
+                                .get(this.tableInfo.id)
+                                ?.find(
+                                    id =>
+                                        id === player.user.id
+                                )
+                        ) {
+
+                            player.send(
+                                'quitsuccess',
+                                {}
+                            );
                         }
                     }
+
                     pokerTable.broadcastState();
+
                 }, 15000);
-    
-                setTimeout(async () => {
-                    try {
-                        function sleep(ms) {
-                            return new Promise(resolve => setTimeout(resolve, ms));
+
+                // -------------------------------------------------
+                // NOUVELLE MAIN
+                // -------------------------------------------------
+
+                setTimeout(
+                    async () => {
+
+                        try {
+
+                            function sleep(ms) {
+                                return new Promise(
+                                    resolve =>
+                                        setTimeout(
+                                            resolve,
+                                            ms
+                                        )
+                                );
+                            }
+
+                            this.shareCards();
+
+                            await sleep(5000);
+
+                            pokerTable.startGame();
+
+                        } catch (err) {
+
+                            console.error(
+                                '[NEW HAND] Error:',
+                                err
+                            );
                         }
-                        this.shareCards();
-                        await sleep(5000);
-                        pokerTable.startGame();   
-                    } catch (err) { }
-                    pokerTable.broadcastState();
-                    pokerTable.isShowDownInProgress = false;
-                }, 15000);
-            }else {
+
+                        pokerTable.broadcastState();
+
+                        pokerTable.isShowDownInProgress =
+                            false;
+
+                    },
+                    15000
+                );
+
+            } else {
+
                 pokerTable.broadcastState(true);
             }
+
         } catch (error) {
-          console.error('Error', error);
+
+            console.error(
+                'Error',
+                error
+            );
         }
     }
 
     shareCards() {
-        for (const player of this.players.values()) {
-            player.send("shareCards", {message: "share cards"});
+        for (
+            const player
+            of this.players.values()
+        ) {
+
+            player.send(
+                "shareCards",
+                {
+                    message: "share cards"
+                }
+            );
         }
     }
 
     countActivePlayers() {
-        return this.playerInHandInitial.size - this.foldedPlayers.size;
+        return (
+            this.playerInHandInitial.size -
+            this.foldedPlayers.size
+        );
     }
 
-    async distributeWinnings(preShowdownStacks, pots, activeHands, orphanPots = 0, mainWinners = []) {
-        const updatedStacks = [...preShowdownStacks];
+    async distributeWinnings(
+        preShowdownStacks,
+        pots,
+        activeHands,
+        orphanPots = 0,
+        mainWinners = []
+    ) {
+
+        const updatedStacks =
+            [...preShowdownStacks];
+
         const detailedWinners = [];
-        for (const pot of pots) {
-            const eligibleIndexes = pot.eligiblePlayers;
-            const activeHandsOfPot = activeHands.filter(hand => eligibleIndexes.includes(hand.playerIndex));
-            const potWinners = pokerHandSolver.winners(activeHandsOfPot); 
-            const winnerIndexes = potWinners.map(w => w.playerIndex);
 
-            if (winnerIndexes.length === 0 || pot.size == 0) continue;
+        for (
+            const pot
+            of pots
+        ) {
 
-            if(pot.eligiblePlayers.length > 1) {
-                for (const winner of potWinners) {  
+            const eligibleIndexes =
+                pot.eligiblePlayers;
+
+            const activeHandsOfPot =
+                activeHands.filter(
+                    hand =>
+                        eligibleIndexes.includes(
+                            hand.playerIndex
+                        )
+                );
+
+            const potWinners =
+                pokerHandSolver.winners(
+                    activeHandsOfPot
+                );
+
+            const winnerIndexes =
+                potWinners.map(
+                    w => w.playerIndex
+                );
+
+            if (
+                winnerIndexes.length === 0 ||
+                pot.size == 0
+            ) {
+                continue;
+            }
+
+            if (
+                pot.eligiblePlayers.length > 1
+            ) {
+
+                for (
+                    const winner
+                    of potWinners
+                ) {
+
                     detailedWinners.push({
-                        playerIndex: winner.playerIndex,
-                        descr: winner.descr
+                        playerIndex:
+                            winner.playerIndex,
+
+                        descr:
+                            winner.descr
                     });
                 }
             }
-            
-            const rakeSize = pot.isRakeable ? 0.05 : 0 
-            const rake = Math.floor(pot.size * rakeSize);
-            const netPot = pot.size - rake;
-            const amountPerReceiver = Math.floor(netPot / winnerIndexes.length);
-            const remainder = netPot % winnerIndexes.length;
 
-            for (const index of winnerIndexes) {
-                updatedStacks[index] += amountPerReceiver;
+            const rakeSize =
+                pot.isRakeable
+                    ? 0.05
+                    : 0;
+
+            const rake =
+                Math.floor(
+                    pot.size * rakeSize
+                );
+
+            const netPot =
+                pot.size - rake;
+
+            const amountPerReceiver =
+                Math.floor(
+                    netPot /
+                    winnerIndexes.length
+                );
+
+            const remainder =
+                netPot %
+                winnerIndexes.length;
+
+            for (
+                const index
+                of winnerIndexes
+            ) {
+
+                updatedStacks[index] +=
+                    amountPerReceiver;
             }
+
             if (remainder > 0) {
-                updatedStacks[winnerIndexes[0]] += remainder;
+
+                updatedStacks[
+                    winnerIndexes[0]
+                ] += remainder;
             }
 
-            if (orphanPots > 0 && mainWinners.length > 0) {
-                const share = Math.floor(orphanPots / mainWinners.length);
-                let remainder = orphanPots % mainWinners.length;
-                for (const winnerIndex of mainWinners) {
-                    updatedStacks[winnerIndex] += share;
+            if (
+                orphanPots > 0 &&
+                mainWinners.length > 0
+            ) {
+
+                const share =
+                    Math.floor(
+                        orphanPots /
+                        mainWinners.length
+                    );
+
+                let remainder =
+                    orphanPots %
+                    mainWinners.length;
+
+                for (
+                    const winnerIndex
+                    of mainWinners
+                ) {
+
+                    updatedStacks[
+                        winnerIndex
+                    ] += share;
+
                     if (remainder > 0) {
-                        updatedStacks[winnerIndex] += 1;
+
+                        updatedStacks[
+                            winnerIndex
+                        ] += 1;
+
                         remainder--;
                     }
                 }
             }
         }
-        return { updatedStacks, detailedWinners };
+
+        return {
+            updatedStacks,
+            detailedWinners
+        };
     }
 
-    async playerAction(socket, playerSeats, action, bet, disconnectedPlayers) {
+    async playerAction(
+        socket,
+        playerSeats,
+        action,
+        bet,
+        disconnectedPlayers
+    ) {
+
         try {
+
             const table = this.table;
-            const pokerTable = this;    
-            const tableSessionId = this.id;
-            
-            if(table.isHandInProgress()) {
-                if(table.isBettingRoundInProgress()) {
-                    if(table.playerToAct() !== playerSeats) {
-                        if(socket != null) {
-                            socket.emit('playerActionError', { message: 'not your turn' });
+            const pokerTable = this;
+
+            const tableSessionId =
+                this.id;
+
+            if (
+                table.isHandInProgress()
+            ) {
+
+                if (
+                    table.isBettingRoundInProgress()
+                ) {
+
+                    if (
+                        table.playerToAct() !==
+                        playerSeats
+                    ) {
+
+                        if (socket != null) {
+
+                            socket.emit(
+                                'playerActionError',
+                                {
+                                    message:
+                                        'not your turn'
+                                }
+                            );
                         }
+
                         return;
-                    }else {
-                        if (action == 'fold') {
-                            if(!pokerTable.foldedPlayers.has(playerSeats)) {
-                                pokerTable.foldedPlayers.add(playerSeats);
+                    }
+
+                    // -------------------------------------------------
+                    // ACTION DU JOUEUR
+                    // -------------------------------------------------
+
+                    else {
+
+                        if (
+                            action == 'fold'
+                        ) {
+
+                            if (
+                                !pokerTable.foldedPlayers.has(
+                                    playerSeats
+                                )
+                            ) {
+
+                                pokerTable.foldedPlayers.add(
+                                    playerSeats
+                                );
                             }
-                            pokerTable.holeCardsToShow[playerSeats] = null;
-                        }    
-                        table.actionTaken(action, bet);
-                        pokerTable.cancelAutoFoldTimer();
-                        pokerTable.currentRoundActions = pokerTable.currentRoundActions.filter(
-                            action => action.playerId !== playerSeats
+
+                            pokerTable.holeCardsToShow[
+                                playerSeats
+                            ] = null;
+                        }
+
+                        table.actionTaken(
+                            action,
+                            bet
                         );
+
+                        pokerTable.cancelAutoFoldTimer();
+
+                        pokerTable.currentRoundActions =
+                            pokerTable.currentRoundActions.filter(
+                                action =>
+                                    action.playerId !==
+                                    playerSeats
+                            );
+
                         pokerTable.currentRoundActions.push({
-                            playerId: playerSeats,
-                            action: action,
-                            amount: table.seats()[playerSeats].betSize
+                            playerId:
+                                playerSeats,
+
+                            action:
+                                action,
+
+                            amount:
+                                table.seats()[
+                                    playerSeats
+                                ].betSize
                         });
                     }
+
+                    // -------------------------------------------------
+                    // ACTIONS DES JOUEURS DECONNECTES
+                    // -------------------------------------------------
+
                     let actionTaken = false;
                     let loopSafetyCounter = 0;
+
                     do {
+
                         actionTaken = false;
-                        const disconnected = disconnectedPlayers.get(tableSessionId);
+
+                        const disconnected =
+                            disconnectedPlayers.get(
+                                tableSessionId
+                            );
+
                         if (disconnected) {
-                            for (const [uid, p] of (disconnected.entries() || [])) {
-                                const seatDisconnected = p.seatIndex;
-                                const currentPlayer = this.getPlayer(seatDisconnected);
+
+                            for (
+                                const [
+                                    uid,
+                                    p
+                                ]
+                                of (
+                                    disconnected.entries() ||
+                                    []
+                                )
+                            ) {
+
+                                const seatDisconnected =
+                                    p.seatIndex;
+
+                                const currentPlayer =
+                                    this.getPlayer(
+                                        seatDisconnected
+                                    );
+
                                 try {
-                                    if(table.playerToAct() === Number(seatDisconnected) && currentPlayer?.user?.id === uid) {
-                                        if(!pokerTable.foldedPlayers.has(seatDisconnected)) {
-                                            pokerTable.foldedPlayers.add(seatDisconnected);
+
+                                    if (
+                                        table.playerToAct() ===
+                                        Number(
+                                            seatDisconnected
+                                        ) &&
+                                        currentPlayer
+                                            ?.user
+                                            ?.id === uid
+                                    ) {
+
+                                        if (
+                                            !pokerTable
+                                                .foldedPlayers
+                                                .has(
+                                                    seatDisconnected
+                                                )
+                                        ) {
+
+                                            pokerTable
+                                                .foldedPlayers
+                                                .add(
+                                                    seatDisconnected
+                                                );
                                         }
-                                        pokerTable.holeCardsToShow[seatDisconnected] = null;
-                                        table.actionTaken('fold');
-                                        actionTaken = true;
-                                        pokerTable.currentRoundActions = pokerTable.currentRoundActions.filter(
-                                            action => action.playerId !== seatDisconnected
+
+                                        pokerTable
+                                            .holeCardsToShow[
+                                                seatDisconnected
+                                            ] = null;
+
+                                        table.actionTaken(
+                                            'fold'
                                         );
-                                        pokerTable.currentRoundActions.push({
-                                            playerId: seatDisconnected,
-                                            action: 'fold',
-                                            amount: 0
-                                        });
+
+                                        actionTaken =
+                                            true;
+
+                                        pokerTable
+                                            .currentRoundActions =
+                                            pokerTable
+                                                .currentRoundActions
+                                                .filter(
+                                                    action =>
+                                                        action.playerId !==
+                                                        seatDisconnected
+                                                );
+
+                                        pokerTable
+                                            .currentRoundActions
+                                            .push({
+
+                                                playerId:
+                                                    seatDisconnected,
+
+                                                action:
+                                                    'fold',
+
+                                                amount:
+                                                    0
+                                            });
                                     }
+
                                 } catch (ignored) {
-                                    actionTaken = false;
+
+                                    actionTaken =
+                                        false;
                                 }
                             }
                         }
+
                         loopSafetyCounter++;
-                        if (loopSafetyCounter > 10) break;
+
+                        if (
+                            loopSafetyCounter > 10
+                        ) {
+                            break;
+                        }
+
                     } while (actionTaken);
-                } 
-                if(!table.isBettingRoundInProgress()) {
-                    if (!pokerTable.manualPots[pokerTable.roundIndex]) {
-                        pokerTable.manualPots[pokerTable.roundIndex] = [];
+                }
+
+                // -------------------------------------------------
+                // FIN DU ROUND
+                // -------------------------------------------------
+
+                if (
+                    !table.isBettingRoundInProgress()
+                ) {
+
+                    if (
+                        !pokerTable
+                            .manualPots[
+                                pokerTable.roundIndex
+                            ]
+                    ) {
+
+                        pokerTable
+                            .manualPots[
+                                pokerTable.roundIndex
+                            ] = [];
                     }
-                    const seats = table.seats() || [];
-                    for (let i = 0; i < seats.length; i++) {
+
+                    const seats =
+                        table.seats() || [];
+
+                    for (
+                        let i = 0;
+                        i < seats.length;
+                        i++
+                    ) {
+
                         if (seats[i]) {
-                            const manualPot = pokerTable.manualPots[pokerTable.roundIndex];
-                            const existingEntry = manualPot.find(entry => entry.seatIndex === i);
+
+                            const manualPot =
+                                pokerTable
+                                    .manualPots[
+                                        pokerTable.roundIndex
+                                    ];
+
+                            const existingEntry =
+                                manualPot.find(
+                                    entry =>
+                                        entry.seatIndex === i
+                                );
+
                             if (existingEntry) {
-                                existingEntry.betSize = seats[i].betSize;
+
+                                existingEntry.betSize =
+                                    seats[i].betSize;
+
                             } else {
-                                manualPot.push({ seatIndex: i, betSize: seats[i].betSize });
+
+                                manualPot.push({
+                                    seatIndex:
+                                        i,
+
+                                    betSize:
+                                        seats[i].betSize
+                                });
                             }
                         }
                     }
-                    pokerTable.currentRoundActions = [];
+
+                    pokerTable.currentRoundActions =
+                        [];
+
                     pokerTable.roundIndex += 1;
-                    if(!table.areBettingRoundsCompleted()) {
+
+                    if (
+                        !table.areBettingRoundsCompleted()
+                    ) {
+
                         table.endBettingRound();
                     }
                 }
-                
-                if (table.areBettingRoundsCompleted()) {
+
+                // -------------------------------------------------
+                // FIN DE LA MAIN
+                // -------------------------------------------------
+
+                if (
+                    table.areBettingRoundsCompleted()
+                ) {
+
                     this.endGame();
-                }else {
-                    pokerTable.broadcastState(true);
+
+                } else {
+
+                    pokerTable.broadcastState(
+                        true
+                    );
                 }
             }
+
         } catch (error) {
-            console.error('[PLAYER ACTION] Error', error);
+
+            console.error(
+                '[PLAYER ACTION] Error',
+                error
+            );
         }
     }
 
     getFreesit() {
-        return Number(this.maxSeats) - Number(this.seatTaken.size);
+        return (
+            Number(this.maxSeats) -
+            Number(this.seatTaken.size)
+        );
     }
 
-    cleanPots(pots, foldedPlayers) {
+    cleanPots(
+        pots,
+        foldedPlayers
+    ) {
+
         const cleanedPots = [];
+
         let orphanPotSize = 0;
-        for (const pot of pots) {
-            const eligiblePlayersBeforeFilter = pot.eligiblePlayers.length;
-            pot.eligiblePlayers = pot.eligiblePlayers.filter(p => !foldedPlayers.includes(p));
-            if (pot.eligiblePlayers.length === 0) {
-                orphanPotSize += pot.size;
+
+        for (
+            const pot
+            of pots
+        ) {
+
+            const eligiblePlayersBeforeFilter =
+                pot.eligiblePlayers.length;
+
+            pot.eligiblePlayers =
+                pot.eligiblePlayers.filter(
+                    p =>
+                        !foldedPlayers.includes(p)
+                );
+
+            if (
+                pot.eligiblePlayers.length === 0
+            ) {
+
+                orphanPotSize +=
+                    pot.size;
+
             } else {
-                pot.isRakeable = eligiblePlayersBeforeFilter > 1;
-                cleanedPots.push(pot);
+
+                pot.isRakeable =
+                    eligiblePlayersBeforeFilter > 1;
+
+                cleanedPots.push(
+                    pot
+                );
             }
         }
-        return {cleanedPots, orphanPotSize};
+
+        return {
+            cleanedPots,
+            orphanPotSize
+        };
     }
 
     restorePots() {
+
         const allRoundPots = [];
+
         let orphanPots = 0;
-        for (let roundIndex = 0; roundIndex < this.manualPots.length; roundIndex++) {
-            const roundBets = this.manualPots[roundIndex];
-            if (!roundBets || roundBets.length === 0) {
+
+        for (
+            let roundIndex = 0;
+            roundIndex < this.manualPots.length;
+            roundIndex++
+        ) {
+
+            const roundBets =
+                this.manualPots[
+                    roundIndex
+                ];
+
+            if (
+                !roundBets ||
+                roundBets.length === 0
+            ) {
+
                 allRoundPots.push([]);
+
                 continue;
             }
-            const totalBetsBySeat = new Map();
-            for (const { seatIndex, betSize } of roundBets) {
+
+            const totalBetsBySeat =
+                new Map();
+
+            for (
+                const {
+                    seatIndex,
+                    betSize
+                }
+                of roundBets
+            ) {
+
                 if (betSize > 0) {
-                    totalBetsBySeat.set(seatIndex, (totalBetsBySeat.get(seatIndex) || 0) + betSize);
+
+                    totalBetsBySeat.set(
+                        seatIndex,
+
+                        (
+                            totalBetsBySeat.get(
+                                seatIndex
+                            ) || 0
+                        ) + betSize
+                    );
                 }
             }
-            let seatStacks = Array.from(totalBetsBySeat.entries())
-                .map(([seatIndex, amount]) => ({ seatIndex, remaining: amount }));
+
+            let seatStacks =
+                Array.from(
+                    totalBetsBySeat.entries()
+                ).map(
+                    ([
+                        seatIndex,
+                        amount
+                    ]) => ({
+                        seatIndex,
+                        remaining:
+                            amount
+                    })
+                );
+
             const pots = [];
-            while (seatStacks.length > 0) {
-                const minBet = Math.min(...seatStacks.map(s => s.remaining));
-                const eligible = seatStacks.map(s => s.seatIndex);
-                const potSize = minBet * eligible.length;
+
+            while (
+                seatStacks.length > 0
+            ) {
+
+                const minBet =
+                    Math.min(
+                        ...seatStacks.map(
+                            s =>
+                                s.remaining
+                        )
+                    );
+
+                const eligible =
+                    seatStacks.map(
+                        s =>
+                            s.seatIndex
+                    );
+
+                const potSize =
+                    minBet *
+                    eligible.length;
+
                 pots.push({
-                    size: potSize,
-                    eligiblePlayers: [...eligible]
+
+                    size:
+                        potSize,
+
+                    eligiblePlayers:
+                        [
+                            ...eligible
+                        ]
                 });
-                seatStacks = seatStacks
-                    .map(s => ({ seatIndex: s.seatIndex, remaining: s.remaining - minBet }))
-                    .filter(s => s.remaining > 0);
+
+                seatStacks =
+                    seatStacks
+                        .map(
+                            s => ({
+                                seatIndex:
+                                    s.seatIndex,
+
+                                remaining:
+                                    s.remaining -
+                                    minBet
+                            })
+                        )
+                        .filter(
+                            s =>
+                                s.remaining > 0
+                        );
             }
-            const {cleanedPots, orphanPotSize} = this.cleanPots(pots, Array.from(this.foldedPlayers.values()));
-            orphanPots += orphanPotSize; 
-            allRoundPots.push(cleanedPots);
+
+            const {
+                cleanedPots,
+                orphanPotSize
+            } =
+                this.cleanPots(
+                    pots,
+                    Array.from(
+                        this.foldedPlayers.values()
+                    )
+                );
+
+            orphanPots +=
+                orphanPotSize;
+
+            allRoundPots.push(
+                cleanedPots
+            );
         }
-        const combined = allRoundPots.flat();
-        return {combined, orphanPots};
+
+        const combined =
+            allRoundPots.flat();
+
+        return {
+            combined,
+            orphanPots
+        };
     }
 
-    mergeAndSortPotsByRound(flatedPots, orphanPots) {
-        const sorted = [...flatedPots].sort((a, b) => b.eligiblePlayers.length - a.eligiblePlayers.length);
-        const groupedMap = new Map();
-        for (const pot of sorted) {
-            if (pot.eligiblePlayers.length <= 1) continue;
-            const key = pot.eligiblePlayers.slice().sort((a, b) => a - b).join(',');
-            if (groupedMap.has(key)) {
-                groupedMap.get(key).size += pot.size;
+    mergeAndSortPotsByRound(
+        flatedPots,
+        orphanPots
+    ) {
+
+        const sorted =
+            [...flatedPots].sort(
+                (a, b) =>
+                    b.eligiblePlayers.length -
+                    a.eligiblePlayers.length
+            );
+
+        const groupedMap =
+            new Map();
+
+        for (
+            const pot
+            of sorted
+        ) {
+
+            if (
+                pot.eligiblePlayers.length <= 1
+            ) {
+                continue;
+            }
+
+            const key =
+                pot.eligiblePlayers
+                    .slice()
+                    .sort(
+                        (a, b) => a - b
+                    )
+                    .join(',');
+
+            if (
+                groupedMap.has(key)
+            ) {
+
+                groupedMap.get(key).size +=
+                    pot.size;
+
             } else {
-                groupedMap.set(key, { ...pot, eligiblePlayers: [...pot.eligiblePlayers] });
+
+                groupedMap.set(
+                    key,
+                    {
+                        ...pot,
+
+                        eligiblePlayers:
+                            [
+                                ...pot.eligiblePlayers
+                            ]
+                    }
+                );
             }
         }
-        const result = Array.from(groupedMap.values());
+
+        const result =
+            Array.from(
+                groupedMap.values()
+            );
+
         if (orphanPots > 0) {
-            result.push({ size: orphanPots, eligiblePlayers: [] });
+
+            result.push({
+                size:
+                    orphanPots,
+
+                eligiblePlayers:
+                    []
+            });
         }
+
         return result;
     }
 
+    // -------------------------------------------------------------
+    // REPLACE PLAYER
+    // -------------------------------------------------------------
+    // IMPORTANT :
+    // Un joueur avec stack = 0 reste assis.
+    // -------------------------------------------------------------
+
     async replacePlayer(stacks) {
-        for (const player of this.players.values()) {
-            if (player.seatIndex != undefined) {
+
+        for (
+            const player
+            of this.players.values()
+        ) {
+
+            if (
+                player.seatIndex != undefined
+            ) {
+
                 try {
-                    const seats = this.table.seats();
-                    if (seats[player.seatIndex] !== null) {
-                        this.table.standUp(player.seatIndex);  
+
+                    const seats =
+                        this.table.seats();
+
+                    if (
+                        seats[player.seatIndex] !==
+                        null
+                    ) {
+
+                        this.table.standUp(
+                            player.seatIndex
+                        );
                     }
-                    const stack = stacks[player.seatIndex];
-                    if(stack && stack > 0) {
-                        this.table.sitDown(player.seatIndex, stack);
-                    } else {
-                        this.table.sitDown(player.seatIndex, 0);
-                    }
+
+                    const stack =
+                        Number(
+                            stacks[player.seatIndex] ?? 0
+                        );
+
+                    // Le joueur reste assis même avec 0
+                    this.table.sitDown(
+                        player.seatIndex,
+                        stack > 0 ? stack : 0
+                    );
+
                 } catch (err) {
-                    console.error('[REPLACE PLAYER] ERR seat', player.seatIndex, err);
-                    await this.removePlayer(player.socketio.id);
+
+                    console.error(
+                        '[REPLACE PLAYER] ERR seat',
+                        player.seatIndex,
+                        err
+                    );
+
+                    await this.removePlayer(
+                        player.socketio.id
+                    );
                 }
             }
         }
     }
 
-    prepareHistoriqueMain(communityCards, holeCards, foldedPlayers, mainWinners, playerNames) {
-        const table_name = this.tableInfo?.name ?? '-';
+    prepareHistoriqueMain(
+        communityCards,
+        holeCards,
+        foldedPlayers,
+        mainWinners,
+        playerNames
+    ) {
+
+        const table_name =
+            this.tableInfo?.name ?? '-';
+
         const main_joueurs = [];
-        for (let i = 0; i < playerNames.length; i++) {
-            const pseudo = playerNames[i];
-            const cartes = holeCards[i];
-            if (pseudo && Array.isArray(cartes) && cartes.length > 0) {
-                main_joueurs.push({ pseudo, cards: cartes });
+
+        for (
+            let i = 0;
+            i < playerNames.length;
+            i++
+        ) {
+
+            const pseudo =
+                playerNames[i];
+
+            const cartes =
+                holeCards[i];
+
+            if (
+                pseudo &&
+                Array.isArray(cartes) &&
+                cartes.length > 0
+            ) {
+
+                main_joueurs.push({
+                    pseudo,
+                    cards: cartes
+                });
             }
         }
+
         const foldes = [];
-        const foldedIdxs = foldedPlayers instanceof Set ? Array.from(foldedPlayers) : (Array.isArray(foldedPlayers) ? foldedPlayers : []);
-        for (const idx of foldedIdxs) {
-            if (playerNames[idx]) foldes.push(playerNames[idx]);
+
+        const foldedIdxs =
+            foldedPlayers instanceof Set
+                ? Array.from(foldedPlayers)
+                : (
+                    Array.isArray(
+                        foldedPlayers
+                    )
+                        ? foldedPlayers
+                        : []
+                );
+
+        for (
+            const idx
+            of foldedIdxs
+        ) {
+
+            if (
+                playerNames[idx]
+            ) {
+
+                foldes.push(
+                    playerNames[idx]
+                );
+            }
         }
+
         const gagnants = [];
-        if (Array.isArray(mainWinners)) {
-            for (const idx of mainWinners) {
-                const playerName = playerNames[idx.playerIndex] || playerNames[idx];
-                if (playerName && !gagnants.includes(playerName)) {
-                    gagnants.push(playerName);
+
+        if (
+            Array.isArray(mainWinners)
+        ) {
+
+            for (
+                const idx
+                of mainWinners
+            ) {
+
+                const playerName =
+                    playerNames[
+                        idx.playerIndex
+                    ] ||
+                    playerNames[idx];
+
+                if (
+                    playerName &&
+                    !gagnants.includes(
+                        playerName
+                    )
+                ) {
+
+                    gagnants.push(
+                        playerName
+                    );
                 }
             }
         }
-        if (gagnants.length === 0) {
-            for (const pseudo of playerNames) {
-                if (pseudo && !foldes.includes(pseudo)) {
-                    gagnants.push(pseudo);
+
+        if (
+            gagnants.length === 0
+        ) {
+
+            for (
+                const pseudo
+                of playerNames
+            ) {
+
+                if (
+                    pseudo &&
+                    !foldes.includes(
+                        pseudo
+                    )
+                ) {
+
+                    gagnants.push(
+                        pseudo
+                    );
+
                     break;
                 }
             }
         }
-        return { table_name, cartes_communaute: communityCards, main_joueurs, foldes, gagnants };
+
+        return {
+            table_name,
+            cartes_communaute:
+                communityCards,
+            main_joueurs,
+            foldes,
+            gagnants
+        };
     }
 
     async checkStartConditions() {
-        if (!this.table.isHandInProgress() && !this.isShowDownInProgress && this.seatTaken.size >= 2) {
+
+        if (
+            !this.table.isHandInProgress() &&
+            !this.isShowDownInProgress &&
+            this.seatTaken.size >= 2
+        ) {
+
             await this.startGame();
         }
+
         try {
+
             this.broadcastState();
+
         } catch (error) {
-            console.error(error);
+
+            console.error(
+                error
+            );
         }
     }
 
     async startGame() {
-        // Double-check to prevent starting with < 2 players
-        if (this.seatTaken.size < 2) {
-            console.warn(`[TABLE ${this.tableInfo.id}] Cannot start hand: only ${this.seatTaken.size} players seated.`);
+
+        // -------------------------------------------------------------
+        // Minimum 2 joueurs assis
+        // -------------------------------------------------------------
+
+        if (
+            this.seatTaken.size < 2
+        ) {
+
+            console.warn(
+                `[TABLE ${this.tableInfo.id}] Cannot start hand: only ${this.seatTaken.size} players seated.`
+            );
+
             return;
         }
 
-        // --- NEW CHECK: Prevent 1v1 if a player has 0 stack ---
-        const seats = this.table.seats() || [];
-        const activePlayers = seats.filter(s => s !== null && s.stack > 0);
-        if (this.seatTaken.size === 2 && activePlayers.length < 2) {
-            console.log(`[TABLE ${this.tableInfo.id}] Cannot start 1v1 hand: a player has 0 stack.`);
-            
-            // Identifier le joueur à 0
-            const zeroStackPlayerIndex = seats.findIndex(s => s !== null && s.stack === 0);
-            if (zeroStackPlayerIndex !== -1) {
-            for (const player of this.players.values()) {
-            if (player.seatIndex === zeroStackPlayerIndex) {
-                player.send('needRecave', { message: 'Votre tapis est vide, veuillez recaver pour continuer.' });
-                console.log(`[TABLE ${this.tableInfo.id}] Joueur ${player.user.id} a 0 tapis, suppression automatique.`);
-                await this.removePlayer(player.socketio.id);
-                player.send("quitsuccess", { tableId: this.tableInfo.id });
-            }
-            }
-            }
-            return; // Bloque le démarrage
-        }
-        // -----------------------------------------------------
+        // -------------------------------------------------------------
+        // Refresh table
+        // -------------------------------------------------------------
 
         try {
-            const latestTable = await Table.findByPk(this.tableInfo.id);
+
+            const latestTable =
+                await Table.findByPk(
+                    this.tableInfo.id
+                );
+
             if (latestTable) {
-                this.gameType = latestTable.gameType;
-                this.tableInfo = latestTable.get({ plain: true });
+
+                this.gameType =
+                    latestTable.gameType;
+
+                this.tableInfo =
+                    latestTable.get({
+                        plain: true
+                    });
             }
+
         } catch (err) {
-            console.error("Error refreshing table gameType:", err);
+
+            console.error(
+                "Error refreshing table gameType:",
+                err
+            );
         }
 
-        // console.log(`[DEBUG] Starting Game - Type: ${this.gameType}`);
-        this.foldedPlayers = new Set();
+        // -------------------------------------------------------------
+        // START HAND
+        // -------------------------------------------------------------
+
+        this.foldedPlayers =
+            new Set();
+
         this.table.startHand();
-        this.activePlayers = this.table.numActivePlayers();
+
+        this.activePlayers =
+            this.table.numActivePlayers();
+
         this.lastPots = [];
+
         this.manualPots = [];
+
         this.roundIndex = 0;
-        if(!this.manualPots[this.roundIndex]) {
-            this.manualPots[this.roundIndex] = [];
+
+        if (
+            !this.manualPots[
+                this.roundIndex
+            ]
+        ) {
+
+            this.manualPots[
+                this.roundIndex
+            ] = [];
         }
 
-        for(let i = 0; i < seats.length; i++) {
-            if(seats[i]) {
-                this.manualPots[this.roundIndex].push({seatIndex: i, betSize: seats[i].betSize});
+        // IMPORTANT :
+        // récupérer les sièges après startHand()
+        const seats =
+            this.table.seats() || [];
+
+        for (
+            let i = 0;
+            i < seats.length;
+            i++
+        ) {
+
+            if (seats[i]) {
+
+                this.manualPots[
+                    this.roundIndex
+                ].push({
+
+                    seatIndex:
+                        i,
+
+                    betSize:
+                        seats[i].betSize
+                });
             }
         }
-        
-        for(const player of this.removedPlayers.values()) {
-            this.removePlayer(player.socketio.id);
-            player.send("quitsuccess", {});
+
+        // -------------------------------------------------------------
+        // JOUEURS A SUPPRIMER
+        // -------------------------------------------------------------
+
+        for (
+            const player
+            of this.removedPlayers.values()
+        ) {
+
+            this.removePlayer(
+                player.socketio.id
+            );
+
+            player.send(
+                "quitsuccess",
+                {}
+            );
         }
+
         this.removedPlayers.clear();
 
-        this.playerInHandInitial = new Set();
-        const playersInHand = this.table.handPlayers();
-        for (let i = 0; i < playersInHand.length; i++) {
-            if (playersInHand[i]) {
-                this.playerInHandInitial.add(i);
+        // -------------------------------------------------------------
+        // JOUEURS DANS LA MAIN
+        // -------------------------------------------------------------
+
+        this.playerInHandInitial =
+            new Set();
+
+        const playersInHand =
+            this.table.handPlayers();
+
+        for (
+            let i = 0;
+            i < playersInHand.length;
+            i++
+        ) {
+
+            if (
+                playersInHand[i]
+            ) {
+
+                this.playerInHandInitial.add(
+                    i
+                );
             }
         }
 
-        const hands = this.table.holeCards();
+        // -------------------------------------------------------------
+        // CARTES
+        // -------------------------------------------------------------
 
-        if (this.gameType === 'omaha') {
-            // console.log("[DEBUG] Omaha mode: Taking full control of card distribution.");
+        const hands =
+            this.table.holeCards();
+
+        if (
+            this.gameType === 'omaha'
+        ) {
+
             const ALL_CARDS = [
-                '2c', '2d', '2h', '2s', '3c', '3d', '3h', '3s', '4c', '4d', '4h', '4s',
-                '5c', '5d', '5h', '5s', '6c', '6d', '6h', '6s', '7c', '7d', '7h', '7s',
-                '8c', '8d', '8h', '8s', '9c', '9d', '9h', '9s', 'Tc', 'Td', 'Th', 'Ts',
-                'Jc', 'Jd', 'Jh', 'Js', 'Qc', 'Qd', 'Qh', 'Qs', 'Kc', 'Kd', 'Kh', 'Ks',
+                '2c', '2d', '2h', '2s',
+                '3c', '3d', '3h', '3s',
+                '4c', '4d', '4h', '4s',
+                '5c', '5d', '5h', '5s',
+                '6c', '6d', '6h', '6s',
+                '7c', '7d', '7h', '7s',
+                '8c', '8d', '8h', '8s',
+                '9c', '9d', '9h', '9s',
+                'Tc', 'Td', 'Th', 'Ts',
+                'Jc', 'Jd', 'Jh', 'Js',
+                'Qc', 'Qd', 'Qh', 'Qs',
+                'Kc', 'Kd', 'Kh', 'Ks',
                 'Ac', 'Ad', 'Ah', 'As'
             ];
-            
-            let deck = [...ALL_CARDS];
-            for (let i = deck.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [deck[i], deck[j]] = [deck[j], deck[i]];
+
+            let deck =
+                [...ALL_CARDS];
+
+            // Mélange Fisher-Yates
+            for (
+                let i = deck.length - 1;
+                i > 0;
+                i--
+            ) {
+
+                const j =
+                    Math.floor(
+                        Math.random() *
+                        (i + 1)
+                    );
+
+                [
+                    deck[i],
+                    deck[j]
+                ] = [
+                    deck[j],
+                    deck[i]
+                ];
             }
 
-            this.holeCards = Array(this.maxSeats).fill(null);
-            this.holeCardsToShow = Array(this.maxSeats).fill(null);
+            this.holeCards =
+                Array(
+                    this.maxSeats
+                ).fill(null);
 
-            for (let i = 0; i < this.maxSeats; i++) {
-                if (this.playerInHandInitial.has(i)) {
-                    const cards = deck.splice(0, 4);
-                    this.holeCards[i] = cards;
-                    this.holeCardsToShow[i] = cards;
+            this.holeCardsToShow =
+                Array(
+                    this.maxSeats
+                ).fill(null);
+
+            // ---------------------------------------------------------
+            // 4 cartes par joueur en Omaha
+            // ---------------------------------------------------------
+
+            for (
+                let i = 0;
+                i < this.maxSeats;
+                i++
+            ) {
+
+                if (
+                    this.playerInHandInitial.has(i)
+                ) {
+
+                    const cards =
+                        deck.splice(
+                            0,
+                            4
+                        );
+
+                    this.holeCards[i] =
+                        cards;
+
+                    this.holeCardsToShow[i] =
+                        cards;
+
                 } else {
-                    this.holeCards[i] = [];
-                    this.holeCardsToShow[i] = [];
+
+                    this.holeCards[i] =
+                        [];
+
+                    this.holeCardsToShow[i] =
+                        [];
                 }
             }
-            // Pre-deal Omaha community cards to avoid duplicates
-            this.omahaCommunityCards = deck.splice(0, 5);
-            // console.log("[DEBUG] Omaha community cards pre-dealt:", this.omahaCommunityCards);
-        } else {
-            this.omahaCommunityCards = null;
-            if (hands?.length > 0) {
-                const holesCardsPlayer = hands.map(hand => 
-                    Array.isArray(hand) ? hand.map(c => `${c.rank}${c.suit?.[0] ?? '?'}`) : []
+
+            // ---------------------------------------------------------
+            // 5 cartes communautaires pré-distribuées
+            // ---------------------------------------------------------
+
+            this.omahaCommunityCards =
+                deck.splice(
+                    0,
+                    5
                 );
-                this.holeCards = [...holesCardsPlayer];
-                this.holeCardsToShow = [...holesCardsPlayer];
+
+        } else {
+
+            this.omahaCommunityCards =
+                null;
+
+            if (
+                hands?.length > 0
+            ) {
+
+                const holesCardsPlayer =
+                    hands.map(
+                        hand =>
+                            Array.isArray(hand)
+                                ? hand.map(
+                                    c =>
+                                        `${c.rank}${c.suit?.[0] ?? '?'}`
+                                )
+                                : []
+                    );
+
+                this.holeCards =
+                    [...holesCardsPlayer];
+
+                this.holeCardsToShow =
+                    [...holesCardsPlayer];
             }
         }
+
+        // -------------------------------------------------------------
+        // BROADCAST START
+        // -------------------------------------------------------------
+
         this.broadcastStart();
-        this.broadcastState(true);
-    }    
+
+        this.broadcastState(
+            true
+        );
+    }
 
     hasSeatAvailable() {
-        return this.seatTaken.size < this.maxSeats;
+        return (
+            this.seatTaken.size <
+            this.maxSeats
+        );
     }
-    
+
     getAvailableSeatIndex() {
-        for (let i = 0; i < this.maxSeats; i++) {
-            if (!this.seatTaken.has(i)) return i;
+
+        for (
+            let i = 0;
+            i < this.maxSeats;
+            i++
+        ) {
+
+            if (
+                !this.seatTaken.has(i)
+            ) {
+
+                return i;
+            }
         }
+
         return null;
     }
-    
-    addPlayer(player, seatPlayer) {
+
+    addPlayer(
+        player,
+        seatPlayer
+    ) {
+
         try {
+
             let seatIndex = null;
-            if (seatPlayer !== null && seatPlayer !== undefined) {
-                if (seatPlayer >= 0 && seatPlayer < this.maxSeats && !this.seatTaken.has(seatPlayer)) {
-                    seatIndex = seatPlayer;
+
+            if (
+                seatPlayer !== null &&
+                seatPlayer !== undefined
+            ) {
+
+                if (
+                    seatPlayer >= 0 &&
+                    seatPlayer < this.maxSeats &&
+                    !this.seatTaken.has(
+                        seatPlayer
+                    )
+                ) {
+
+                    seatIndex =
+                        seatPlayer;
+
                 } else {
+
                     return false;
                 }
+
             } else {
-                seatIndex = this.getAvailableSeatIndex();
+
+                seatIndex =
+                    this.getAvailableSeatIndex();
             }
 
-            if (seatIndex === null) return false;
-            
-            const avatar = `${Math.floor(Math.random() * this.avatarsMaxNb)}.png`;
-            const existingAvatar = this.avatars.find(avt => avt.userId === player.user.id); 
+            if (
+                seatIndex === null
+            ) {
+
+                return false;
+            }
+
+            // ---------------------------------------------------------
+            // AVATAR
+            // ---------------------------------------------------------
+
+            const avatar =
+                `${Math.floor(
+                    Math.random() *
+                    this.avatarsMaxNb
+                )}.png`;
+
+            const existingAvatar =
+                this.avatars.find(
+                    avt =>
+                        avt.userId ===
+                        player.user.id
+                );
+
             if (existingAvatar) {
-                existingAvatar.avatar = avatar;
+
+                existingAvatar.avatar =
+                    avatar;
+
             } else {
-                this.avatars.push({ userId: player.user.id, avatar });
+
+                this.avatars.push({
+                    userId:
+                        player.user.id,
+
+                    avatar
+                });
             }
 
-            this.table.sitDown(seatIndex, player.chips);
-            this.players.set(player.socketio.id, player);
-            player.seatIndex = seatIndex;
-            this.seatTaken.add(seatIndex);
+            // ---------------------------------------------------------
+            // INSTALLATION DU JOUEUR
+            // ---------------------------------------------------------
+
+            this.table.sitDown(
+                seatIndex,
+                player.chips
+            );
+
+            this.players.set(
+                player.socketio.id,
+                player
+            );
+
+            player.seatIndex =
+                seatIndex;
+
+            this.seatTaken.add(
+                seatIndex
+            );
+
             this.checkStartConditions();
-            this.caves.set(player.user.id, player.chips);
 
-            let playerCavesVal = playerCavesMap.get(player.user.id) || [];
-            let caveObj = playerCavesVal.find(cave => cave.tableId === this.tableInfo.id);
+            // ---------------------------------------------------------
+            // CAVE
+            // ---------------------------------------------------------
+
+            this.caves.set(
+                player.user.id,
+                player.chips
+            );
+
+            let playerCavesVal =
+                playerCavesMap.get(
+                    player.user.id
+                ) || [];
+
+            let caveObj =
+                playerCavesVal.find(
+                    cave =>
+                        cave.tableId ===
+                        this.tableInfo.id
+                );
+
             if (caveObj) {
-                caveObj.cave = player.chips;
+
+                caveObj.cave =
+                    player.chips;
+
             } else {
-                playerCavesVal.push({ tableId: this.tableInfo.id, cave: player.chips });
+
+                playerCavesVal.push({
+
+                    tableId:
+                        this.tableInfo.id,
+
+                    cave:
+                        player.chips
+                });
             }
-            playerCavesMap.set(player.user.id, playerCavesVal);
+
+            playerCavesMap.set(
+                player.user.id,
+                playerCavesVal
+            );
+
             return true;
-        }catch(err) {
-            console.error('[ADD PLAYER] ERR', err);
+
+        } catch (err) {
+
+            console.error(
+                '[ADD PLAYER] ERR',
+                err
+            );
+
             return false;
         }
     }
 
     async removePlayer(socketId) {
+
         try {
-            const player = this.players.get(socketId);
-            if (!player) return false;
-            const seatIndex = player.seatIndex;
-            this.seatTaken.delete(seatIndex);
-            this.players.delete(socketId);
-            
-            let playerTables = playerTablesMap.get(player.user.id) ?? [];
-            playerTables = playerTables.filter(table => Number(table) !== Number(this.tableInfo.id));
-            playerTablesMap.set(player.user.id, playerTables);
-           
-            this.table.standUp(seatIndex);
-            this.avatars = this.avatars.filter(avt => avt.userId !== player.user.id);
-            playerCavesMap.delete(player.user.id);
+
+            const player =
+                this.players.get(
+                    socketId
+                );
+
+            if (!player) {
+                return false;
+            }
+
+            const seatIndex =
+                player.seatIndex;
+
+            this.seatTaken.delete(
+                seatIndex
+            );
+
+            this.players.delete(
+                socketId
+            );
+
+            let playerTables =
+                playerTablesMap.get(
+                    player.user.id
+                ) ?? [];
+
+            playerTables =
+                playerTables.filter(
+                    table =>
+                        Number(table) !==
+                        Number(
+                            this.tableInfo.id
+                        )
+                );
+
+            playerTablesMap.set(
+                player.user.id,
+                playerTables
+            );
+
+            this.table.standUp(
+                seatIndex
+            );
+
+            this.avatars =
+                this.avatars.filter(
+                    avt =>
+                        avt.userId !==
+                        player.user.id
+                );
+
+            playerCavesMap.delete(
+                player.user.id
+            );
+
             return true;
-        }catch (err) {
-            console.error('[REMOVE PLAYER] ERR', err);
+
+        } catch (err) {
+
+            console.error(
+                '[REMOVE PLAYER] ERR',
+                err
+            );
         }
     }
 
     getPlayer(seatindex) {
-        for(const player of this.players.values()) {
-            if(Number(player.seatIndex) === Number(seatindex)) {
+
+        for (
+            const player
+            of this.players.values()
+        ) {
+
+            if (
+                Number(
+                    player.seatIndex
+                ) ===
+                Number(seatindex)
+            ) {
+
                 return player;
             }
         }
+
         return null;
     }
 
-    startAutoFoldTimer(expectedToAct) {
-        if (this.autoFoldTimeout) clearTimeout(this.autoFoldTimeout);
-        if (this.table.isHandInProgress()) {
-            const toAct = this.table.playerToAct();
-            if (expectedToAct !== toAct) return;
-            this.autoFoldTimeout = setTimeout(async () => {
-                try {
-                    const stillToAct = this.table.playerToAct();
-                    if (toAct === stillToAct) {
-                        const player = this.getPlayer(stillToAct);
-                        if (player) {
-                            console.log(`⏳ Joueur ${player.user.id} inactif, suppression de la table.`);
-                            await this.removePlayer(player.socketio.id);
+    // -------------------------------------------------------------
+    // AUTO FOLD / CHECK
+    // -------------------------------------------------------------
+    // 10 secondes
+    // CHECK si possible
+    // sinon FOLD
+    // -------------------------------------------------------------
+
+    startAutoFoldTimer(
+        expectedToAct
+    ) {
+
+        if (
+            this.autoFoldTimeout
+        ) {
+
+            clearTimeout(
+                this.autoFoldTimeout
+            );
+        }
+
+        if (
+            this.table.isHandInProgress()
+        ) {
+
+            const toAct =
+                this.table.playerToAct();
+
+            if (
+                expectedToAct !==
+                toAct
+            ) {
+
+                return;
+            }
+
+            this.autoFoldTimeout =
+                setTimeout(
+                    async () => {
+
+                        try {
+
+                            const stillToAct =
+                                this.table.playerToAct();
+
+                            // Le joueur est toujours celui qui doit jouer
+                            if (
+                                toAct ===
+                                stillToAct
+                            ) {
+
+                                const player =
+                                    this.getPlayer(
+                                        stillToAct
+                                    );
+
+                                const legalActions =
+                                    this.table.legalActions();
+
+                                // CHECK si disponible,
+                                // sinon FOLD
+                                const action =
+                                    legalActions.actions.includes(
+                                        'check'
+                                    )
+                                        ? 'check'
+                                        : 'fold';
+
+                                await this.playerAction(
+                                    player?.socketio ?? null,
+                                    stillToAct,
+                                    action,
+                                    0,
+                                    disconnectedPlayers
+                                );
+                            }
+
+                        } catch (error) {
+
+                            console.error(
+                                '[AUTOFOLD TIMER] ERR',
+                                error
+                            );
                         }
-                    }
-                } catch (error) {
-                    console.error('[TIMEOUT EXIT TIMER] ERR', error);
-                }
-            }, 10000);
+
+                    },
+                    10000
+                );
         }
     }
 
     cancelAutoFoldTimer() {
-        if (this.autoFoldTimeout) {
-            clearTimeout(this.autoFoldTimeout);
-            this.autoFoldTimeout = null;
+
+        if (
+            this.autoFoldTimeout
+        ) {
+
+            clearTimeout(
+                this.autoFoldTimeout
+            );
+
+            this.autoFoldTimeout =
+                null;
         }
     }
 
-    isPlayerInHand(seatIndex) {
-        if(!this.table.isHandInProgress()) return false;
-        return this.playerInHandInitial.has(seatIndex) && !this.foldedPlayers.has(seatIndex);
+    isPlayerInHand(
+        seatIndex
+    ) {
+
+        if (
+            !this.table.isHandInProgress()
+        ) {
+
+            return false;
+        }
+
+        return (
+            this.playerInHandInitial.has(
+                seatIndex
+            ) &&
+            !this.foldedPlayers.has(
+                seatIndex
+            )
+        );
     }
 
     getActiveSeats() {
+
         const activeSeats = [];
-        for (let i = 0; i < this.maxSeats; i++) {
-            if (this.isPlayerInHand(i)) activeSeats.push(i);
+
+        for (
+            let i = 0;
+            i < this.maxSeats;
+            i++
+        ) {
+
+            if (
+                this.isPlayerInHand(i)
+            ) {
+
+                activeSeats.push(i);
+            }
         }
+
         return activeSeats;
     }
 
     broadcastWin(data) {
-        for (const player of this.players.values()) {
-            player.send("win", data);
+
+        for (
+            const player
+            of this.players.values()
+        ) {
+
+            player.send(
+                "win",
+                data
+            );
         }
     }
 
     broadcastStart() {
-        for (const player of this.players.values()) {
-            player.send("start", {message: "started"});
+
+        for (
+            const player
+            of this.players.values()
+        ) {
+
+            player.send(
+                "start",
+                {
+                    message:
+                        "started"
+                }
+            );
         }
     }
 
-    addAgent(chips = 1000) {
-        const seatIndex = this.getAvailableSeatIndex();
-        if (seatIndex === null) return false;
-        const agentUser = { id: -1 - seatIndex, name: `Agent_${seatIndex}`, chips };
-        const agent = new OmahaAgent(agentUser, chips);
-        agent.seatIndex = seatIndex;
-        this.table.sitDown(seatIndex, chips);
-        this.players.set(`agent_${seatIndex}`, agent);
-        this.seatTaken.add(seatIndex);
-        this.caves.set(agentUser.id, chips);
-        this.avatars.push({ userId: agentUser.id, avatar: `0.png` });
+    addAgent(
+        chips = 1000
+    ) {
+
+        const seatIndex =
+            this.getAvailableSeatIndex();
+
+        if (
+            seatIndex === null
+        ) {
+
+            return false;
+        }
+
+        const agentUser = {
+
+            id:
+                -1 - seatIndex,
+
+            name:
+                `Agent_${seatIndex}`,
+
+            chips
+        };
+
+        const agent =
+            new OmahaAgent(
+                agentUser,
+                chips
+            );
+
+        agent.seatIndex =
+            seatIndex;
+
+        this.table.sitDown(
+            seatIndex,
+            chips
+        );
+
+        this.players.set(
+            `agent_${seatIndex}`,
+            agent
+        );
+
+        this.seatTaken.add(
+            seatIndex
+        );
+
+        this.caves.set(
+            agentUser.id,
+            chips
+        );
+
+        this.avatars.push({
+            userId:
+                agentUser.id,
+
+            avatar:
+                `0.png`
+        });
+
         this.checkStartConditions();
+
         return true;
     }
 
-    async triggerAgentAction(seatIndex) {
-        const agent = this.getPlayer(seatIndex);
-        if (!agent || !agent.isAgent) return;
-        setTimeout(async () => {
-            const decision = agent.decideAction(this);
-            await this.playerAction(null, seatIndex, decision.action, decision.bet, disconnectedPlayers);
-            this.broadcastState();
-        }, 2000);
+    async triggerAgentAction(
+        seatIndex
+    ) {
+
+        const agent =
+            this.getPlayer(
+                seatIndex
+            );
+
+        if (
+            !agent ||
+            !agent.isAgent
+        ) {
+
+            return;
+        }
+
+        setTimeout(
+            async () => {
+
+                const decision =
+                    agent.decideAction(
+                        this
+                    );
+
+                await this.playerAction(
+                    null,
+                    seatIndex,
+                    decision.action,
+                    decision.bet,
+                    disconnectedPlayers
+                );
+
+                this.broadcastState();
+
+            },
+            2000
+        );
     }
 
-    broadcastState(isStart = false) {
-        const activeSeats = this.getActiveSeats();
-        const handInProgress = this.table.isHandInProgress();
-        const tableId = this.id;
-        const button = handInProgress ? this.table.button() : null;
-        
+    broadcastState(
+        isStart = false
+    ) {
+
+        const activeSeats =
+            this.getActiveSeats();
+
+        const handInProgress =
+            this.table.isHandInProgress();
+
+        const tableId =
+            this.id;
+
+        const button =
+            handInProgress
+                ? this.table.button()
+                : null;
+
+        // -------------------------------------------------------------
+        // COMMUNITY CARDS
+        // -------------------------------------------------------------
+
         let communityCards = [];
-        if (handInProgress) {
-            if (this.gameType === 'omaha' && this.omahaCommunityCards) {
-                const round = this.table.roundOfBetting();
-                if (round === 'flop') communityCards = this.omahaCommunityCards.slice(0, 3);
-                else if (round === 'turn') communityCards = this.omahaCommunityCards.slice(0, 4);
-                else if (round === 'river') communityCards = this.omahaCommunityCards.slice(0, 5);
-                else communityCards = [];
+
+        if (
+            handInProgress
+        ) {
+
+            if (
+                this.gameType === 'omaha' &&
+                this.omahaCommunityCards
+            ) {
+
+                const round =
+                    this.table.roundOfBetting();
+
+                if (
+                    round === 'flop'
+                ) {
+
+                    communityCards =
+                        this.omahaCommunityCards.slice(
+                            0,
+                            3
+                        );
+
+                } else if (
+                    round === 'turn'
+                ) {
+
+                    communityCards =
+                        this.omahaCommunityCards.slice(
+                            0,
+                            4
+                        );
+
+                } else if (
+                    round === 'river'
+                ) {
+
+                    communityCards =
+                        this.omahaCommunityCards.slice(
+                            0,
+                            5
+                        );
+
+                } else {
+
+                    communityCards = [];
+                }
+
             } else {
-                communityCards = this.table.communityCards().map(c => `${c.rank}${c.suit[0]}`);
+
+                communityCards =
+                    this.table
+                        .communityCards()
+                        .map(
+                            c =>
+                                `${c.rank}${c.suit[0]}`
+                        );
             }
         }
 
-        const {combined, orphanPots} = this.restorePots();
-        let pots = this.roundIndex !== 0 ? this.mergeAndSortPotsByRound(combined, orphanPots) : [{size:0}];
-        if (handInProgress && pots.length > 0) this.lastPots = pots;
+        // -------------------------------------------------------------
+        // POTS
+        // -------------------------------------------------------------
+
+        const {
+            combined,
+            orphanPots
+        } =
+            this.restorePots();
+
+        let pots =
+            this.roundIndex !== 0
+                ? this.mergeAndSortPotsByRound(
+                    combined,
+                    orphanPots
+                )
+                : [{ size: 0 }];
+
+        if (
+            handInProgress &&
+            pots.length > 0
+        ) {
+
+            this.lastPots =
+                pots;
+        }
+
+        // -------------------------------------------------------------
+        // TO ACT
+        // -------------------------------------------------------------
 
         let toAct = null;
-        if (handInProgress) {
-            if(!this.table.isBettingRoundInProgress() && !this.table.areBettingRoundsCompleted()) {
-                try { this.table.endBettingRound(); } catch(ignored) {}
+
+        if (
+            handInProgress
+        ) {
+
+            if (
+                !this.table.isBettingRoundInProgress() &&
+                !this.table.areBettingRoundsCompleted()
+            ) {
+
+                try {
+
+                    this.table.endBettingRound();
+
+                } catch (ignored) {}
             }
-            if(this.table.isBettingRoundInProgress()) {
-                toAct = this.table.playerToAct();
-            } else if (this.table.areBettingRoundsCompleted()) {
+
+            if (
+                this.table.isBettingRoundInProgress()
+            ) {
+
+                toAct =
+                    this.table.playerToAct();
+
+            } else if (
+                this.table.areBettingRoundsCompleted()
+            ) {
+
                 return this.endGame();
             }
         }
-        
-        const step = handInProgress ? this.table.roundOfBetting() : null;
-        const playerNames = Array(this.maxSeats).fill(null);
-        const playerIds = Array(this.maxSeats).fill(null);
-        for (const player of this.players.values()) {
-            if (player.seatIndex !== undefined) {
-                playerNames[player.seatIndex] = player.user.name;
-                playerIds[player.seatIndex] = player.user.id;
+
+        const step =
+            handInProgress
+                ? this.table.roundOfBetting()
+                : null;
+
+        // -------------------------------------------------------------
+        // PLAYERS INFO
+        // -------------------------------------------------------------
+
+        const playerNames =
+            Array(
+                this.maxSeats
+            ).fill(null);
+
+        const playerIds =
+            Array(
+                this.maxSeats
+            ).fill(null);
+
+        for (
+            const player
+            of this.players.values()
+        ) {
+
+            if (
+                player.seatIndex !== undefined
+            ) {
+
+                playerNames[
+                    player.seatIndex
+                ] =
+                    player.user.name;
+
+                playerIds[
+                    player.seatIndex
+                ] =
+                    player.user.id;
             }
         }
 
-        for (const player of this.players.values()) {
+        // -------------------------------------------------------------
+        // BROADCAST PAR JOUEUR
+        // -------------------------------------------------------------
+
+        for (
+            const player
+            of this.players.values()
+        ) {
+
             try {
-                const seatIndex = player.seatIndex;
+
+                const seatIndex =
+                    player.seatIndex;
+
                 const data = {
+
                     tableId,
-                    gameType: this.gameType,
-                    seat: seatIndex,
-                    deal_btn: button,
+
+                    gameType:
+                        this.gameType,
+
+                    seat:
+                        seatIndex,
+
+                    deal_btn:
+                        button,
+
                     handInProgress,
+
                     step,
+
                     toAct,
+
                     communityCards,
-                    seats: this.table.seats(),
+
+                    seats:
+                        this.table.seats(),
+
                     activeSeats,
+
                     playerNames,
+
                     playerIds,
-                    actions: this.currentRoundActions,
-                    // Ensure always 2 cards (or nulls) for consistency across 9 seats
-                    playerCards: this.holeCards[seatIndex] && this.holeCards[seatIndex].length >= 2 
-                        ? this.holeCards[seatIndex].slice(0, 2) 
-                        : [null, null],
-                    legalActions: handInProgress && seatIndex === toAct ? this.table.legalActions() : [],
+
+                    actions:
+                        this.currentRoundActions,
+
+                    // IMPORTANT :
+                    // Toutes les cartes sont envoyées.
+                    // Hold'em = 2 cartes
+                    // Omaha = 4 cartes
+                    playerCards:
+                        this.holeCards[
+                            seatIndex
+                        ],
+
+                    legalActions:
+                        handInProgress &&
+                        seatIndex === toAct
+                            ? this.table.legalActions()
+                            : [],
+
                     pots,
-                    avatars: this.avatars,
+
+                    avatars:
+                        this.avatars
                 };
-                console.log(`[DEBUG broadcastState] Seats stack:`, data.seats.map(s => s?.stack));
-                player.send('tableState', data);
-                if(isStart && toAct !== null && toAct !== undefined) this.startAutoFoldTimer(toAct);
+
+                player.send(
+                    'tableState',
+                    data
+                );
+
+                if (
+                    isStart &&
+                    toAct !== null &&
+                    toAct !== undefined
+                ) {
+
+                    this.startAutoFoldTimer(
+                        toAct
+                    );
+                }
+
             } catch (error) {
-                console.error(`Erreur d'envoi à ${player.user?.name || 'unknown'} :`, error);
+
+                console.error(
+                    `Erreur d'envoi à ${
+                        player.user?.name ||
+                        'unknown'
+                    } :`,
+                    error
+                );
             }
         }
     }
