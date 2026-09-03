@@ -6,6 +6,27 @@ const generateToken = require('../config/generateToken');
 const { sendResetCode } = require('../utils/emailService');
 const { Op } = require('sequelize');
 
+exports.getUserProfile = asyncHandler(async (req, res) => {
+    const { userId } = req.params;
+    const user = await User.findByPk(userId);
+
+    if (!user) {
+        return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
+    }
+
+    res.json({
+        success: true,
+        user: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            avatar_url: user.avatar_url,
+            chips: user.chips,
+            is_verified: user.is_verified
+        }
+    });
+});
+
 exports.getAvatar = asyncHandler(async (req, res) => {
     const { userId } = req.params;
     const user = await User.findByPk(userId);
@@ -128,12 +149,22 @@ exports.forgotPassword = asyncHandler(async (req, res) => {
 });
 
 exports.verifyCode = asyncHandler(async (req, res) => {
-    const { email, code } = req.body;
+    const { email, code, type } = req.body;
     const user = await User.findOne({ where: { email, reset_code: code, reset_code_expires: { [Op.gt]: new Date() } } });
+    
     if (!user) {
         return res.status(400).json({ success: false, message: 'Code invalide ou expiré' });
     }
-    res.json({ success: true, message: 'Code vérifié' });
+
+    if (type === 'account-verification') {
+        user.is_verified = true;
+        user.reset_code = null;
+        user.reset_code_expires = null;
+        await user.save();
+        res.json({ success: true, message: 'Compte vérifié avec succès' });
+    } else {
+        res.json({ success: true, message: 'Code vérifié' });
+    }
 });
 
 exports.resetPassword = asyncHandler(async (req, res) => {
