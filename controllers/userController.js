@@ -134,6 +134,7 @@ exports.register = asyncHandler(async (req, res) => {
 exports.forgotPassword = asyncHandler(async (req, res) => {
     const { email } = req.body;
     const user = await User.findOne({ where: { email } });
+    try{
     if (!user) {
         return res.status(404).json({ success: false, message: 'Utilisateur non trouvé' });
     }
@@ -141,11 +142,20 @@ exports.forgotPassword = asyncHandler(async (req, res) => {
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     user.reset_code = code;
     user.reset_code_expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-    await user.save();
+      console.log("DEBUG: Tentative de sauvegarde pour:", user.email);
+       await user.save();
+       console.log("DEBUG: Sauvegarde réussie pour:", user.email);
 
     await sendResetCode(email, code);
 
     res.json({ success: true, message: 'Code envoyé par email' });
+    }   catch (error) {
+
+           console.error("DEBUG: Erreur critique lors de la sauvegarde du code:",   error);
+       return res.status(500).json({ success: false, message: "Erreur serveurlors de la génération du code" });   
+
+    }  
+
 });
 
 exports.verifyCode = asyncHandler(async (req, res) => {

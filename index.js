@@ -53,19 +53,20 @@ app.use(express.json({ extended: false }));
 app.use("/api/auth", authRoutes);
 app.use("/api/auth/admin", authAdminRoutes);
 app.use("/api/solde", soldeRoutes); // Specific route for public solde access
-app.use("/api", protect, soldeAdminRoutes);
-app.use("/api/depot", protect, depotMobileRoutes);
-app.use("/api/depot", protect, depotCryptoRoutes);
-app.use("/api", protect, typeCrypto);
-app.use("/api/retrait", protect, retraitMobile);
-app.use("/api/retrait", protect, retraitCrypto);
-app.use("/api/tables", protect, tableRoutes);
-app.use("/api", protect, EnvoieRoutes);
-app.use("/api/historique", protect, historiqueRoutes);
+app.use("/api", soldeAdminRoutes);
+app.use("/api/depot", depotMobileRoutes);
+app.use("/api/depot" , depotCryptoRoutes);
+app.use("/api", typeCrypto);
+app.use("/api/retrait", retraitMobile);
+app.use("/api/retrait", retraitCrypto);
+app.use("/api/tables", tableRoutes);
+app.use("/api", EnvoieRoutes);
+app.use("/api/historique", historiqueRoutes);
 app.use("/api/userConnected", userConnectedRoutes);
 app.use("/api/users", userRoutes);
 
 const httpServer = serverSocket(app);   
+
 
 const port = process.env.PORT || 5000;
 httpServer.on('error', (err) => {

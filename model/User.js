@@ -49,17 +49,17 @@ const User = sequelize.define('User', {
     defaultValue: false,
   },
   is_verified: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false,
-  },
-  reset_code: {
-    type: DataTypes.STRING,
-    allowNull: true,
-  },
-  reset_code_expires: {
-    type: DataTypes.DATE,
-    allowNull: true,
-  }
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+    },
+    reset_code: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    reset_code_expires: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    }
 }, {
   tableName: 'users',
   timestamps: false,

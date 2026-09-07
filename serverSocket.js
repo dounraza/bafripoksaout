@@ -283,8 +283,10 @@ const serverSocket = (app) => {
                     }
                 }
 
+                console.log(`[DEBUG] Avant création PokerPlayer: user=${userId}, cave=${playerCave}, type=${typeof playerCave}`);
                 const user = await User.findByPk(userId);
-                const player = new PokerPlayer(socket, user, playerCave);
+                const player = new PokerPlayer(socket, user, Number(playerCave));
+                console.log(`[DEBUG] Après création PokerPlayer: player.chips=${player.chips}`);
                 
                 let seatIndex = null;
                 for (let i = 0; i < table.maxSeats; i++) {
@@ -295,6 +297,11 @@ const serverSocket = (app) => {
                     return socket.emit('joinError', { message: 'La table est plein, veuillez choisir une autre.' });
                 }
                 
+                // ✅ FIX: Nettoyer les données de cave existantes pour cet utilisateur avant d'ajouter le joueur
+                playerCavesMap.delete(Number(userId));
+                table.caves.delete(Number(userId));
+                console.log(`[DEBUG] Ajout à la table: seatIndex=${seatIndex}, chips=${player.chips}`);
+
                 const result = table.addPlayer(player, seatIndex);
                 
                 socket.join(`table-${tableId}`);

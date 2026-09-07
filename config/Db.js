@@ -3,7 +3,7 @@ const dotenv = require("dotenv");
 const path = require("path");
 
 // Charger explicitement le fichier .env situé à la racine du projet
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 console.log('Variables d\'environnement chargées:', {
   host: process.env.DB_HOST,

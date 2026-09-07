@@ -6,8 +6,6 @@ const playerTablesMap = require("../game/playerTables");
 exports.findAll = asyncHandler(async (req, res)=> {
     try {
         const tables = await Table.findAll();
-        console.log("Résultat de la requête BDD :", tables);
-
         const tableIds = tables.map(t => t.id);
         const occupiedSeatsMap = serverSocket.getFreeSits(tableIds);
         
@@ -16,24 +14,18 @@ exports.findAll = asyncHandler(async (req, res)=> {
             const activeTable = serverSocket.findTable(String(t.id));
             if (activeTable) {
                 tableData.activeGameType = activeTable.gameType;
-                tableData.maxSeats = activeTable.maxSeats; // Ensure maxSeats is available
-            } else {
-                // Default max seats if not active
-                tableData.maxSeats = 9; 
             }
             return tableData;
         });
 
-        // Initialize all tables in occupiedSeatsMap if not present
-        tables.forEach(t => {
-            if (!occupiedSeatsMap.has(t.id)) {
-                occupiedSeatsMap.set(t.id, 0); // 0 seats occupied
-            }
-        });
+        for (let i = 1; i <= tables.length; i++) {
+          
+          if (occupiedSeatsMap.get(i) === undefined) {
+            occupiedSeatsMap.set(i, 9);
+          }
+        }
         
         const occupiedSeats = Object.fromEntries(occupiedSeatsMap);
-        
-        console.log('[DEBUG] Response data being sent:', { message: "all", data: dataWithActiveInfo, occupiedSeats });
         
         res.json({message: "all", data: dataWithActiveInfo, occupiedSeats});
     } catch (error) {
