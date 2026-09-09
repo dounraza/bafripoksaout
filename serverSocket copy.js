@@ -155,155 +155,273 @@ const serverSocket = (app) => {
         socket.on('get-online-users', () => {
             socket.emit('online-users-update', Array.from(connectedUsers.values()));
         });
-        socket.on('joinAnyTable', async ({ tableId, userId, playerCave }) => {
+        // socket.on('joinAnyTable', async ({ tableId, userId, playerCave }) => {
           
-          try{
-            if (tableLocks.get(tableId)) {
-               return socket.emit('joinError', { message: 'La table est temporairement verouillée, réessayez.' });
-            }
+        //   try{
+        //     if (tableLocks.get(tableId)) {
+        //        return socket.emit('joinError', { message: 'La table est temporairement verouillée, réessayez.' });
+        //     }
             
-            const exitTime = exitTimes.get(Number(userId));
-            const now = Date.now();
-            const maxExitTime = 1000 * 60 * 0.5;
+        //     const exitTime = exitTimes.get(Number(userId));
+        //     const now = Date.now();
+        //     const maxExitTime = 1000 * 60 * 0.5;
             
-            if (exitTime && now - exitTime.date < maxExitTime && exitTime.tableId === tableId) {
-         //      return socket.emit('joinError', { message: `Vous venez de quitter la table. Veuillez attendre ${formatTime(maxExitTime - (now - exitTime.date))}`})
-            }
+        //     if (exitTime && now - exitTime.date < maxExitTime && exitTime.tableId === tableId) {
+        //  //      return socket.emit('joinError', { message: `Vous venez de quitter la table. Veuillez attendre ${formatTime(maxExitTime - (now - exitTime.date))}`})
+        //     }
           
-            tableLocks.set(tableId, true);
+        //     tableLocks.set(tableId, true);
             
-            console.log('join : table =>', tableId, ', user =>', userId, ', cave =>', playerCave);
+        //     console.log('join : table =>', tableId, ', user =>', userId, ', cave =>', playerCave);
             
-            const found = findPlayerInAllTables(userId, tableId);
+        //     const found = findPlayerInAllTables(userId, tableId);
             
-            if(found) {
-              console.log('[JOIN TABLE] player found !');
-              const { table, player } = found;
-              let idlePlayers = idlePlayersMap.get(table.tableInfo.id) || [];
-              console.log('[JOIN TABLE] idle players map :', idlePlayersMap);
+        //     if(found) {
+        //       console.log('[JOIN TABLE] player found !');
+        //       const { table, player } = found;
+        //       let idlePlayers = idlePlayersMap.get(table.tableInfo.id) || [];
+        //       console.log('[JOIN TABLE] idle players map :', idlePlayersMap);
 
-              console.log('[JOIN TABLE] Checking idle players', idlePlayers);
-              if (idlePlayers.find(id => id === Number(userId))) {
-                console.log('[JOIN TABLE] Player is idle:', userId);
-                socket.emit('joinError', { message: 'Vous étiez inactif, vous devez rejoindre à nouveau.' });
-                idlePlayers = idlePlayers.filter(id => id !== Number(userId));
-                idlePlayersMap.set(Number(tableId), idlePlayers);
-                table.disconnectTimers.delete(Number(userId));
+        //       console.log('[JOIN TABLE] Checking idle players', idlePlayers);
+        //       if (idlePlayers.find(id => id === Number(userId))) {
+        //         console.log('[JOIN TABLE] Player is idle:', userId);
+        //         socket.emit('joinError', { message: 'Vous étiez inactif, vous devez rejoindre à nouveau.' });
+        //         idlePlayers = idlePlayers.filter(id => id !== Number(userId));
+        //         idlePlayersMap.set(Number(tableId), idlePlayers);
+        //         table.disconnectTimers.delete(Number(userId));
                 
-                console.log('[JOIN TABLE] Start remove timer for removing player');
-                setTimeout(() => {
-                  table.removePlayer(socket.id);
-                }, 3000);
-                return;
-              }
+        //         console.log('[JOIN TABLE] Start remove timer for removing player');
+        //         setTimeout(() => {
+        //           table.removePlayer(socket.id);
+        //         }, 3000);
+        //         return;
+        //       }
 
-              const oldSocketId = player.socketio.id;
-              player.socketio = socket;
-              table.players.delete(oldSocketId);
-              table.players.set(socket.id, player);
-              table.handleReconnect(player.user.id);
-              table.broadcastState();
+        //       const oldSocketId = player.socketio.id;
+        //       player.socketio = socket;
+        //       table.players.delete(oldSocketId);
+        //       table.players.set(socket.id, player);
+        //       table.handleReconnect(player.user.id);
+        //       table.broadcastState();
               
-              const disconnected = disconnectedPlayers.get(table.id);
-              if (disconnected) {
-                disconnected.delete(userId);
-                // Supprimer aussi tout joueur qui avait ce seatIndex
-                for (const [uid, p] of disconnected.entries()) {
-                  if (p.seatIndex === player.seatIndex) {
-                    disconnected.delete(uid);
-                  }
-                }
-              }
-              console.log('[JOIN TABLE] stopped !');
+        //       const disconnected = disconnectedPlayers.get(table.id);
+        //       if (disconnected) {
+        //         disconnected.delete(userId);
+        //         // Supprimer aussi tout joueur qui avait ce seatIndex
+        //         for (const [uid, p] of disconnected.entries()) {
+        //           if (p.seatIndex === player.seatIndex) {
+        //             disconnected.delete(uid);
+        //           }
+        //         }
+        //       }
+        //       console.log('[JOIN TABLE] stopped !');
               
-              return;
-            }
+        //       return;
+        //     }
 
-            console.log('[JOIN TABLE] player not found in table');
-           // let table = findTableWithAvailableSeat(tableId);
-            let table = findTable(tableId);
-            if (!table) { 
-              table = await createNewTable(tableId);
-            }
+        //     console.log('[JOIN TABLE] player not found in table');
+        //    // let table = findTableWithAvailableSeat(tableId);
+        //     let table = findTable(tableId);
+        //     if (!table) { 
+        //       table = await createNewTable(tableId);
+        //     }
 
-            let idlePlayers = idlePlayersMap.get(Number(tableId)) || [];
-            idlePlayers = idlePlayers.filter(id => id !== Number(userId));
-            idlePlayersMap.set(Number(tableId), idlePlayers);
-            table.disconnectTimers.delete(Number(userId));
+        //     let idlePlayers = idlePlayersMap.get(Number(tableId)) || [];
+        //     idlePlayers = idlePlayers.filter(id => id !== Number(userId));
+        //     idlePlayersMap.set(Number(tableId), idlePlayers);
+        //     table.disconnectTimers.delete(Number(userId));
 
-            console.log('[JOIN TABLE] disconnectTimers', table.disconnectTimers);
-            console.log('[JOIN TABLE] idlePlayersMap', idlePlayersMap);
+        //     console.log('[JOIN TABLE] disconnectTimers', table.disconnectTimers);
+        //     console.log('[JOIN TABLE] idlePlayersMap', idlePlayersMap);
             
-            const solde = await Soldes.findOne({ where: { userId } });
+        //     const solde = await Soldes.findOne({ where: { userId } });
 
-            if (!solde) {
-              return socket.emit('joinError', { message: 'Informations introuvables' });
-            }
+        //     if (!solde) {
+        //       return socket.emit('joinError', { message: 'Informations introuvables' });
+        //     }
 
-            if (solde.montant < playerCave) {
-              return socket.emit('joinError', { message: 'Solde insuffisant' });    
-            }
+        //     if (solde.montant < playerCave) {
+        //       return socket.emit('joinError', { message: 'Solde insuffisant' });    
+        //     }
 
-            const joinedTables = playerTables.get(Number(userId));
-            console.log('[JOIN TABLE] joined tables', joinedTables);
-            const playerCaves = playerCavesMap.get(Number(userId)) || [];
+        //     const joinedTables = playerTables.get(Number(userId));
+        //     console.log('[JOIN TABLE] joined tables', joinedTables);
+        //     const playerCaves = playerCavesMap.get(Number(userId)) || [];
 
-            if (joinedTables !== undefined && joinedTables.length > 0) {
-              let currentPlayerTotalCaves = 0;
-              for (let tableId of joinedTables) {
-                console.log('[JOIN PLAYER] joined table', tableId);
-                const cave = playerCaves.find(cave => parseInt(cave.tableId) === parseInt(tableId));
-                if (cave !== undefined) currentPlayerTotalCaves += cave.cave;
-              }
+        //     if (joinedTables !== undefined && joinedTables.length > 0) {
+        //       let currentPlayerTotalCaves = 0;
+        //       for (let tableId of joinedTables) {
+        //         console.log('[JOIN PLAYER] joined table', tableId);
+        //         const cave = playerCaves.find(cave => parseInt(cave.tableId) === parseInt(tableId));
+        //         if (cave !== undefined) currentPlayerTotalCaves += cave.cave;
+        //       }
 
-              console.log('[JOIN TABLE] current player total caves', currentPlayerTotalCaves);
+        //       console.log('[JOIN TABLE] current player total caves', currentPlayerTotalCaves);
 
-              if (currentPlayerTotalCaves + Number(playerCave) > solde.montant) {
-                return socket.emit('joinError', { message: 'Solde insuffisant' });
-              }
-            }
+        //       if (currentPlayerTotalCaves + Number(playerCave) > solde.montant) {
+        //         return socket.emit('joinError', { message: 'Solde insuffisant' });
+        //       }
+        //     }
 
-            const user =  await User.findByPk(userId);
-            const player = new PokerPlayer(socket, user, playerCave);
+        //     const user =  await User.findByPk(userId);
+        //     const player = new PokerPlayer(socket, user, playerCave);
             
-            let seatIndex = null;
-            for (let i = 0; i < table.maxSeats; i++) {
-               if (!table.seatTaken.has(i)) {
-                 seatIndex = i;
-                 break;
-               }
-            }
+        //     let seatIndex = null;
+        //     for (let i = 0; i < table.maxSeats; i++) {
+        //        if (!table.seatTaken.has(i)) {
+        //          seatIndex = i;
+        //          break;
+        //        }
+        //     }
             
-            console.log('Join : seatIndex =>', JSON.stringify(seatIndex));
+        //     console.log('Join : seatIndex =>', JSON.stringify(seatIndex));
             
-            if (seatIndex === null) {
-              return socket.emit('joinError', { message: 'La table est plein, veuillez choisir une autre.' });
-            }
+        //     if (seatIndex === null) {
+        //       return socket.emit('joinError', { message: 'La table est plein, veuillez choisir une autre.' });
+        //     }
             
-            const result = table.addPlayer(player, seatIndex);
-            const ownTables = playerTables.get(player.user.id) || [];
-            ownTables.push(tableId);
+        //     const result = table.addPlayer(player, seatIndex);
+        //     const ownTables = playerTables.get(player.user.id) || [];
+        //     ownTables.push(tableId);
             
-            playerTables.set(player.user.id, ownTables);
+        //     playerTables.set(player.user.id, ownTables);
             
-            console.log('[JOIN TABLE] player table', playerTables);
+        //     console.log('[JOIN TABLE] player table', playerTables);
             
-            const disconnected = disconnectedPlayers.get(table.id);
-            if (disconnected) {
-              disconnected.delete(userId);
-              for (const [uid, p] of disconnected.entries()) {
-                if (p.seatIndex === player.seatIndex) {
-                  disconnected.delete(uid);
-                }
-              }
-            }
-          } catch(err) {
-            console.error(err);
-          } finally {
-            tableLocks.set(tableId, false);
+        //     const disconnected = disconnectedPlayers.get(table.id);
+        //     if (disconnected) {
+        //       disconnected.delete(userId);
+        //       for (const [uid, p] of disconnected.entries()) {
+        //         if (p.seatIndex === player.seatIndex) {
+        //           disconnected.delete(uid);
+        //         }
+        //       }
+        //     }
+        //   } catch(err) {
+        //     console.error(err);
+        //   } finally {
+        //     tableLocks.set(tableId, false);
+        //   }
+
+        // });
+        socket.on('joinAnyTable', async ({ tableId, userId, playerCave }) => {
+  try {
+    if (tableLocks.get(tableId)) {
+      return socket.emit('joinError', { message: 'La table est temporairement verrouillée, réessayez.' });
+    }
+    tableLocks.set(tableId, true);
+    console.log('join : table =>', tableId, ', user =>', userId, ', cave =>', playerCave);
+    // --- 1. Gestion Reconnexion ---
+    const found = findPlayerInAllTables(userId, tableId);
+    if (found) {
+      console.log('[JOIN TABLE] player found !');
+      const { table, player } = found;
+      let idlePlayers = idlePlayersMap.get(table.tableInfo.id) || [];
+      
+      if (idlePlayers.find(id => id === Number(userId))) {
+        socket.emit('joinError', { message: 'Vous étiez inactif, vous devez rejoindre à nouveau.' });
+        idlePlayers = idlePlayers.filter(id => id !== Number(userId));
+        idlePlayersMap.set(Number(tableId), idlePlayers);
+        table.disconnectTimers.delete(Number(userId));
+        setTimeout(() => {
+          table.removePlayer(socket.id);
+        }, 3000);
+        return;
+      } 
+      const oldSocketId = player.socketio.id;
+      player.socketio = socket;
+      table.players.delete(oldSocketId);
+      table.players.set(socket.id, player);
+      table.handleReconnect(player.user.id);
+      table.broadcastState();
+      const disconnected = disconnectedPlayers.get(table.id);
+      if (disconnected) {
+        disconnected.delete(userId);
+        for (const [uid, p] of disconnected.entries()) {
+          if (p.seatIndex === player.seatIndex) {
+            disconnected.delete(uid);
           }
+        }
+      }
+      return;
+    }
 
-        });
+    // --- 2. Vérification et Débit du Solde ---
+    const solde = await Soldes.findOne({ where: { userId } });
+    if (!solde) {
+      return socket.emit('joinError', { message: 'Informations introuvables' });
+    }
+
+    if (solde.montant < playerCave) {
+      return socket.emit('joinError', { message: 'Solde insuffisant' });    
+    }
+
+    // [CORRECTION] : Débit immédiat et atomique AVANT d'ajouter le joueur
+    try {
+        solde.montant -= Number(playerCave);
+        await solde.save();
+        console.log('[JOIN TABLE] Solde débité de', playerCave, 'pour', userId);
+    } catch (err) {
+        console.error('[JOIN TABLE] Erreur lors du débit du solde:', err);
+        return socket.emit('joinError', { message: 'Erreur lors de la transaction financière.' });
+    }
+
+    // --- 3. Initialisation de la table ---
+    let table = findTable(tableId);
+    if (!table) { 
+      table = await createNewTable(tableId);
+    }
+
+    let idlePlayers = idlePlayersMap.get(Number(tableId)) || [];
+    idlePlayers = idlePlayers.filter(id => id !== Number(userId));
+    idlePlayersMap.set(Number(tableId), idlePlayers);
+    table.disconnectTimers.delete(Number(userId));
+
+    // --- 4. Création du joueur et ajout ---
+    const user = await User.findByPk(userId);
+    const player = new PokerPlayer(socket, user, playerCave);
+    
+    let seatIndex = null;
+    for (let i = 0; i < table.maxSeats; i++) {
+       if (!table.seatTaken.has(i)) {
+         seatIndex = i;
+         break;
+       }
+    }
+    
+    if (seatIndex === null) {
+      // [CORRECTION] : Remboursement si table pleine
+      solde.montant += Number(playerCave);
+      await solde.save();
+      return socket.emit('joinError', { message: 'La table est pleine, veuillez choisir une autre.' });
+    }
+
+    // Ajout effectif au moteur de jeu
+    const result = table.addPlayer(player, seatIndex);
+    
+    // --- 5. Mise à jour des références ---
+    const ownTables = playerTables.get(player.user.id) || [];
+    ownTables.push(tableId);
+    playerTables.set(player.user.id, ownTables);
+    
+    const disconnected = disconnectedPlayers.get(table.id);
+    if (disconnected) {
+      disconnected.delete(userId);
+      for (const [uid, p] of disconnected.entries()) {
+        if (p.seatIndex === player.seatIndex) {
+          disconnected.delete(uid);
+        }
+      }
+    }
+
+  } catch(err) {
+    console.error('[JOIN TABLE] Erreur critique:', err);
+    socket.emit('joinError', { message: 'Erreur interne lors de la connexion.' });
+  } finally {
+    tableLocks.set(tableId, false);
+  }
+});
+
 
         socket.on("playerAction", async ({tableId, tableSessionId, playerSeats, action, bet}) => {
           console.log('# Player action');

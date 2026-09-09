@@ -283,10 +283,8 @@ const serverSocket = (app) => {
                     }
                 }
 
-                console.log(`[DEBUG] Avant création PokerPlayer: user=${userId}, cave=${playerCave}, type=${typeof playerCave}`);
                 const user = await User.findByPk(userId);
-                const player = new PokerPlayer(socket, user, Number(playerCave));
-                console.log(`[DEBUG] Après création PokerPlayer: player.chips=${player.chips}`);
+                const player = new PokerPlayer(socket, user, playerCave);
                 
                 let seatIndex = null;
                 for (let i = 0; i < table.maxSeats; i++) {
@@ -297,11 +295,6 @@ const serverSocket = (app) => {
                     return socket.emit('joinError', { message: 'La table est plein, veuillez choisir une autre.' });
                 }
                 
-                // ✅ FIX: Nettoyer les données de cave existantes pour cet utilisateur avant d'ajouter le joueur
-                playerCavesMap.delete(Number(userId));
-                table.caves.delete(Number(userId));
-                console.log(`[DEBUG] Ajout à la table: seatIndex=${seatIndex}, chips=${player.chips}`);
-
                 const result = table.addPlayer(player, seatIndex);
                 
                 socket.join(`table-${tableId}`);
@@ -370,84 +363,150 @@ const serverSocket = (app) => {
             }
         });
 
-        socket.on('recave', async ({ tableId, amount }) => {
-            console.log(`[RECAVE] User ${socket.id} recave ${amount} on table ${tableId}`);
-            try {
-                // Trouver le joueur dans l'une des tables
-                let foundPlayer = null;
-                let foundTable = null;
-                
-                for (const sessionMap of pokerTables.values()) {
-                    for (const pokerTable of sessionMap.values()) {
-                        const player = pokerTable.players.get(socket.id);
-                        if (player && String(pokerTable.tableInfo.id) === String(tableId)) {
-                            foundPlayer = player;
-                            foundTable = pokerTable;
-                            break;
-                        }
-                    }
-                    if (foundPlayer) break;
+        // socket.on('recave', async ({ tableId, amount }) => {
+        //     console.log(`[RECAVE] User ${socket.id} recave ${amount} on table ${tableId}`);
+        //     try {
+        //         // Trouver le joueur dans l'une des tables
+        //         let foundPlayer = null;
+        //         let foundTable = null;
+        //         for (const sessionMap of pokerTables.values()) {
+        //             for (const pokerTable of sessionMap.values()) {
+        //                 const player = pokerTable.players.get(socket.id);
+        //                 if (player && String(pokerTable.tableInfo.id) === String(tableId)) {
+        //                     foundPlayer = player;
+        //                     foundTable = pokerTable;
+        //                     break;
+        //                 }
+        //             }
+        //             if (foundPlayer) break;
+        //         }
+        //         if (!foundPlayer || !foundTable) {
+        //             return socket.emit('recaveError', { message: 'Joueur ou table introuvable' });
+        //         }
+        //         // 1. Vérifier le solde en DB
+        //         const solde = await Soldes.findOne({ where: { userId: foundPlayer.user.id } });
+        //         if (!solde || solde.montant < amount) {
+        //             return socket.emit('recaveError', { message: 'Solde insuffisant' });
+        //         }
+        //         // AJOUT : Vérifier qu'aucune main n'est en cours
+        //         if (foundTable.table.isHandInProgress()) {
+        //             return socket.emit('recaveError', { message: 'Action impossible pendant la main' });
+        //         }
+        //         // 2. Mettre à jour le solde en DB
+        //         await Soldes.update(
+        //             { montant: Number(solde.montant) - Number(amount) }, 
+        //             { where: { userId: foundPlayer.user.id } }
+        //         );
+        //         // 3. Mettre à jour le stack du joueur
+        //         const table = foundTable.table;
+        //         const seatIndex = foundPlayer.seatIndex;
+        //         // Mettre à jour le stack dans le moteur poker-ts
+        //         // On doit d'abord faire lever le joueur pour pouvoir modifier son stack
+        //         table.standUp(seatIndex);
+        //                         // On récupère le stack actuel
+        //         const currentStack = foundPlayer.chips; 
+        //         // On calcule le nouveau total
+        //         const newStack =  Number(amount);
+        //         // On asseoit le joueur avec le NOUVEAU TOTAL
+        //         table.sitDown(seatIndex, newStack);
+        //         // Mettre à jour le stack local du joueur et la map des caves
+        //         foundPlayer.chips = newStack;
+        //         foundTable.caves.set(foundPlayer.user.id, foundPlayer.chips);
+        //         // 4. Mettre à jour playerCavesMap
+        //         let playerCavesVal = playerCavesMap.get(foundPlayer.user.id) || [];
+        //         let caveObj = playerCavesVal.find(cave => String(cave.tableId) === String(tableId));
+        //         if (caveObj) {
+        //             caveObj.cave = foundPlayer.chips;
+        //         } else {
+        //             playerCavesVal.push({ tableId: tableId, cave: foundPlayer.chips });
+        //         }
+        //         playerCavesMap.set(foundPlayer.user.id, playerCavesVal);
+        //         foundTable.broadcastState();
+        //         console.log(`[RECAVE] Succès: ${foundPlayer.user.name} a recavé ${foundPlayer.chips} jetons.`);
+        //     } catch (err) {
+        //         console.error('[RECAVE] ERR', err);
+        //         socket.emit('recaveError', { message: 'Erreur lors de la recave' });
+        //     }
+        socket.on('rebuy', async ({ tableId, amount }) => {
+    try {
+        // Trouver le joueur dans l'une des tables
+        let foundPlayer = null;
+        let foundTable = null;
+        for (const sessionMap of pokerTables.values()) {
+            for (const pokerTable of sessionMap.values()) {
+                const player = pokerTable.players.get(socket.id);
+                if (player && String(pokerTable.tableInfo.id) === String(tableId)) {
+                    foundPlayer = player;
+                    foundTable = pokerTable;
+                    break;
                 }
-                
-                if (!foundPlayer || !foundTable) {
-                    return socket.emit('recaveError', { message: 'Joueur ou table introuvable' });
-                }
-
-                // 1. Vérifier le solde en DB
-                const solde = await Soldes.findOne({ where: { userId: foundPlayer.user.id } });
-                if (!solde || solde.montant < amount) {
-                    return socket.emit('recaveError', { message: 'Solde insuffisant' });
-                }
-
-                // AJOUT : Vérifier qu'aucune main n'est en cours
-                if (foundTable.table.isHandInProgress()) {
-                    return socket.emit('recaveError', { message: 'Action impossible pendant la main' });
-                }
-
-                // 2. Mettre à jour le solde en DB
-                await Soldes.update(
-                    { montant: Number(solde.montant) - Number(amount) }, 
-                    { where: { userId: foundPlayer.user.id } }
-                );
-                
-                // 3. Mettre à jour le stack du joueur
-                const table = foundTable.table;
-                const seatIndex = foundPlayer.seatIndex;
-                
-                // Mettre à jour le stack dans le moteur poker-ts
-                // On doit d'abord faire lever le joueur pour pouvoir modifier son stack
-                table.standUp(seatIndex);
-                
-                // On récupère le stack actuel
-                const currentStack = foundPlayer.chips; 
-                // On calcule le nouveau total
-                const newStack =  Number(amount);
-                
-                // On asseoit le joueur avec le NOUVEAU TOTAL
-                table.sitDown(seatIndex, newStack);
-                
-                // Mettre à jour le stack local du joueur et la map des caves
-                foundPlayer.chips = newStack;
-                foundTable.caves.set(foundPlayer.user.id, foundPlayer.chips);
-                
-                // 4. Mettre à jour playerCavesMap
-                let playerCavesVal = playerCavesMap.get(foundPlayer.user.id) || [];
-                let caveObj = playerCavesVal.find(cave => String(cave.tableId) === String(tableId));
-                if (caveObj) {
-                    caveObj.cave = foundPlayer.chips;
-                } else {
-                    playerCavesVal.push({ tableId: tableId, cave: foundPlayer.chips });
-                }
-                playerCavesMap.set(foundPlayer.user.id, playerCavesVal);
-
-                foundTable.broadcastState();
-                console.log(`[RECAVE] Succès: ${foundPlayer.user.name} a recavé ${foundPlayer.chips} jetons.`);
-            } catch (err) {
-                console.error('[RECAVE] ERR', err);
-                socket.emit('recaveError', { message: 'Erreur lors de la recave' });
             }
-        });
+            if (foundPlayer) break;
+        }
 
+        if (!foundPlayer || !foundTable) {
+            return socket.emit('rebuyError', { message: 'Joueur ou table introuvable' });
+        }
+
+        // 1. Vérifier le solde en DB
+        const solde = await Soldes.findOne({ where: { userId: foundPlayer.user.id } });
+        if (!solde || solde.montant < amount) {
+            return socket.emit('rebuyError', { message: 'Solde insuffisant' });
+        }
+
+        // AJOUT : Vérifier qu'aucune main n'est en cours
+        if (foundTable.table.isHandInProgress()) {
+            return socket.emit('rebuyError', { message: 'Action impossible pendant la main' });
+        }
+
+        // 2. Mettre à jour le solde en DB
+        await Soldes.update(
+            { montant: Number(solde.montant) - Number(amount) },
+            { where: { userId: foundPlayer.user.id } }
+        );
+
+        // 3. Mettre à jour le stack du joueur
+        const table = foundTable.table;
+        const seatIndex = foundPlayer.seatIndex;
+
+        // On doit d'abord faire lever le joueur pour pouvoir modifier son stack
+        table.standUp(seatIndex);
+
+        // On récupère le nouveau total
+        const newStack = Number(amount);
+
+        // On asseoit le joueur avec le NOUVEAU TOTAL
+        table.sitDown(seatIndex, newStack);
+
+        // Mettre à jour le stack local du joueur et la map des caves
+        foundPlayer.chips = newStack;
+        foundTable.caves.set(foundPlayer.user.id, foundPlayer.chips);
+
+        // 4. Mettre à jour playerCavesMap
+        let playerCavesVal = playerCavesMap.get(foundPlayer.user.id) || [];
+        let caveObj = playerCavesVal.find(cave => String(cave.tableId) === String(tableId));
+
+        if (caveObj) {
+            caveObj.cave = foundPlayer.chips;
+        } else {
+            playerCavesVal.push({
+                tableId: tableId,
+                cave: foundPlayer.chips
+            });
+        }
+
+        playerCavesMap.set(foundPlayer.user.id, playerCavesVal);
+
+        // --- CORRECTION : Diffusion forcée ---
+        // On diffuse l'état mis à jour à tous les joueurs de la table
+        foundTable.broadcastState();
+
+        console.log(`[REBUY] Succès: ${foundPlayer.user.name} a rebuy ${foundPlayer.chips} jetons.`);
+    } catch (err) {
+        console.error('[REBUY] ERR', err);
+        socket.emit('rebuyError', { message: 'Erreur lors du rebuy' });
+    }
+});
         socket.on('quit', async ({ tableId, tableSessionId, force }) => {
             try {
                 const sessionMap = pokerTables.get(tableId);
