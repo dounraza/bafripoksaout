@@ -63,13 +63,18 @@ class PokerTable {
                 return;
             }
 
-            const player = this.players.get(socketId);
+            // ✅ FIX : utiliser socketId pour retrouver le joueur (avant c'était undefined)
+            const player = socketId ? this.players.get(socketId) : null;
+            if (!player) {
+                console.warn(`[DISCONNECT] Joueur ${userId} introuvable avec socketId ${socketId}`);
+                return;
+            }
 
             const timeoutId = setTimeout(async () => {
                 const idlePlayers =
                     idlePlayersMap.get(this.tableInfo.id) || [];
 
-                if (!idlePlayers.find(id => id !== player.user.id)) {
+                if (!idlePlayers.find(id => id === player.user.id)) {
                     idlePlayers.push(player.user.id);
                 }
 
@@ -431,12 +436,8 @@ class PokerTable {
                                         player.seatIndex
                                     ] ?? 0;
 
-                                solde.montant =
-                                    Number(
-                                        solde.montant
-                                    )
-                                    - Number(cave)
-                                    + Number(stack);
+                                const currentMontant = Number(solde.montant) || 0;
+                                solde.montant = Math.max(0, currentMontant - Number(cave) + Number(stack));
 
                                 await solde.save();
 
@@ -444,6 +445,15 @@ class PokerTable {
                                     player.user.id,
                                     stack
                                 );
+
+                                let pCaves = playerCavesMap.get(Number(player.user.id)) || [];
+                                let cObj = pCaves.find(c => Number(c.tableId) === Number(this.tableInfo.id));
+                                if (cObj) {
+                                    cObj.cave = stack;
+                                } else if (stack > 0) {
+                                    pCaves.push({ tableId: Number(this.tableInfo.id), cave: stack });
+                                }
+                                playerCavesMap.set(Number(player.user.id), pCaves);
                             }
 
                         } catch (err) {
@@ -566,46 +576,29 @@ class PokerTable {
                 }
 
                 // -------------------------------------------------
-                // QUIT SUCCESS
+                // EXPULSION AUTOMATIQUE DES JOUEURS SANS RECAVE APRES 18S (Suspense + Résultat + 10s Recave)
                 // -------------------------------------------------
-
-                setTimeout(() => {
-
-                    for (
-                        const player
-                        of pokerTable.removedPlayers.values()
-                    ) {
-
-                        player.send(
-                            "quitsuccess",
-                            {}
-                        );
-                    }
-
-                    for (
-                        const player
-                        of this.players.values()
-                    ) {
-
-                        if (
-                            idlePlayersMap
-                                .get(this.tableInfo.id)
-                                ?.find(
-                                    id =>
-                                        id === player.user.id
-                                )
-                        ) {
-
-                            player.send(
-                                'quitsuccess',
-                                {}
-                            );
+                setTimeout(async () => {
+                    const currentTableSeats = this.table.seats();
+                    for (const player of Array.from(this.players.values())) {
+                        if (player.seatIndex !== undefined && player.seatIndex !== null) {
+                            const seat = currentTableSeats[player.seatIndex];
+                            if (!seat || Number(seat.totalChips ?? seat.stack ?? 0) <= 0) {
+                                console.log(`[AUTO-EXPULSION] Joueur ${player.user?.name || player.user?.id} expulsé (0 jeton)`);
+                                player.send("quitsuccess", { message: 'Temps écoulé, vous avez été retiré de la table.' });
+                                await this.removePlayer(player.socketio?.id);
+                            }
                         }
                     }
 
-                    pokerTable.broadcastState();
+                    for (const player of pokerTable.removedPlayers.values()) {
+                        player.send("quitsuccess", {});
+                    }
 
-                }, 15000);
+                    pokerTable.broadcastState();
+                }, 18000);
+
+                pokerTable.broadcastState();
 
                 // -------------------------------------------------
                 // NOUVELLE MAIN
@@ -646,7 +639,7 @@ class PokerTable {
                             false;
 
                     },
-                    15000
+                    19000
                 );
 
             } else {
@@ -664,10 +657,16 @@ class PokerTable {
     }
 
     shareCards() {
-        for (
-            const player
-            of this.players.values()
-        ) {
+        for (const player of Array.from(this.players.values())) {
+            const seatIndex = player.seatIndex;
+            const seat = this.table.seats()[seatIndex];
+            
+            if (seat && seat.stack === 0) {
+                console.log(`[AUTO-QUIT] Joueur ${player.user?.name || player.user?.id} à 0 jetons, expulsion.`);
+                player.send("quitsuccess", { message: 'Vous avez été expulsé car votre tapis est vide.' });
+                this.removePlayer(player.socketio?.id);
+                continue; // Ne pas envoyer 'shareCards' à ce joueur
+            }
 
             player.send(
                 "shareCards",
@@ -1612,11 +1611,18 @@ class PokerTable {
 
         if (
             !this.table.isHandInProgress() &&
-            !this.isShowDownInProgress &&
-            this.seatTaken.size >= 2
+            !this.isShowDownInProgress
         ) {
+            const seats = this.table.seats();
+            const playersWithChips = Array.from(this.players.values()).filter(p => {
+                if (p.seatIndex === undefined || p.seatIndex === null) return false;
+                const seat = seats[p.seatIndex];
+                return seat && Number(seat.totalChips) > 0;
+            });
 
-            await this.startGame();
+            if (playersWithChips.length >= 2) {
+                await this.startGame();
+            }
         }
 
         try {
@@ -1634,15 +1640,20 @@ class PokerTable {
     async startGame() {
 
         // -------------------------------------------------------------
-        // Minimum 2 joueurs assis
+        // Minimum 2 joueurs avec jetons (> 0) assis
         // -------------------------------------------------------------
 
-        if (
-            this.seatTaken.size < 2
-        ) {
+        const currentSeats = this.table.seats();
+        const playersWithChips = Array.from(this.players.values()).filter(p => {
+            if (p.seatIndex === undefined || p.seatIndex === null) return false;
+            const seat = currentSeats[p.seatIndex];
+            return seat && Number(seat.totalChips) > 0;
+        });
+
+        if (playersWithChips.length < 2) {
 
             console.warn(
-                `[TABLE ${this.tableInfo.id}] Cannot start hand: only ${this.seatTaken.size} players seated.`
+                `[TABLE ${this.tableInfo.id}] Cannot start hand: only ${playersWithChips.length} players with chips.`
             );
 
             return;
@@ -1676,6 +1687,20 @@ class PokerTable {
                 "Error refreshing table gameType:",
                 err
             );
+        }
+
+        // -------------------------------------------------------------
+        // Expulser les joueurs à 0 jeton avant de démarrer la main
+        // -------------------------------------------------------------
+        for (const player of Array.from(this.players.values())) {
+            if (player.seatIndex !== undefined && player.seatIndex !== null) {
+                const seat = currentSeats[player.seatIndex];
+                if (!seat || Number(seat.totalChips ?? seat.stack ?? 0) <= 0) {
+                    console.log(`[START-GAME] Expulsion joueur ${player.user?.name || player.user?.id} (stack = 0)`);
+                    player.send("quitsuccess", { message: 'Vous avez été expulsé car votre tapis est vide.' });
+                    await this.removePlayer(player.socketio?.id);
+                }
+            }
         }
 
         // -------------------------------------------------------------
@@ -2032,10 +2057,21 @@ class PokerTable {
             // INSTALLATION DU JOUEUR
             // ---------------------------------------------------------
 
+            const chips = Number(player.chips);
+
+            const seats = this.table.seats();
+            if (seats[seatIndex] !== null) {
+                try {
+                    this.table.standUp(seatIndex);
+                } catch (ignored) {}
+            }
+
             this.table.sitDown(
                 seatIndex,
-                player.chips
+                chips
             );
+
+            player.chips = chips;
 
             this.players.set(
                 player.socketio.id,
@@ -2057,7 +2093,7 @@ class PokerTable {
 
             this.caves.set(
                 player.user.id,
-                player.chips
+                chips
             );
 
             let playerCavesVal =
@@ -2068,14 +2104,14 @@ class PokerTable {
             let caveObj =
                 playerCavesVal.find(
                     cave =>
-                        cave.tableId ===
-                        this.tableInfo.id
+                        Number(cave.tableId) ===
+                        Number(this.tableInfo.id)
                 );
 
             if (caveObj) {
 
                 caveObj.cave =
-                    player.chips;
+                    chips;
 
             } else {
 
@@ -2085,7 +2121,7 @@ class PokerTable {
                         this.tableInfo.id,
 
                     cave:
-                        player.chips
+                        chips
                 });
             }
 
@@ -2123,12 +2159,27 @@ class PokerTable {
             const seatIndex =
                 player.seatIndex;
 
-            this.seatTaken.delete(
-                seatIndex
-            );
+            if (seatIndex !== undefined && seatIndex !== null) {
+                this.seatTaken.delete(
+                    seatIndex
+                );
+
+                try {
+                    const seats = this.table.seats();
+                    if (seats[seatIndex] !== null) {
+                        this.table.standUp(
+                            seatIndex
+                        );
+                    }
+                } catch (ignored) {}
+            }
 
             this.players.delete(
                 socketId
+            );
+
+            this.caves.delete(
+                player.user.id
             );
 
             let playerTables =
@@ -2150,10 +2201,6 @@ class PokerTable {
                 playerTables
             );
 
-            this.table.standUp(
-                seatIndex
-            );
-
             this.avatars =
                 this.avatars.filter(
                     avt =>
@@ -2161,9 +2208,13 @@ class PokerTable {
                         player.user.id
                 );
 
-            playerCavesMap.delete(
-                player.user.id
-            );
+            let pCaves = playerCavesMap.get(Number(player.user.id)) || [];
+            pCaves = pCaves.filter(c => Number(c.tableId) !== Number(this.tableInfo.id));
+            if (pCaves.length > 0) {
+                playerCavesMap.set(Number(player.user.id), pCaves);
+            } else {
+                playerCavesMap.delete(Number(player.user.id));
+            }
 
             return true;
 

@@ -19,7 +19,7 @@ const Table = sequelize.define('Table', {
     allowNull: false,
   },
   gameType: {
-    type: DataTypes.ENUM('holdem', 'omaha'),
+    type: DataTypes.ENUM('holdem', 'omaha', 'ludo'),
     defaultValue: 'holdem',
     allowNull: false,
   },

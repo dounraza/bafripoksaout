@@ -3,7 +3,7 @@ class PokerPlayer {
         this.socketio = socketio;     
         this.user = user;
         this.seatIndex = undefined;
-        this.chips = chips;
+        this.chips = Number(chips);
         this.quiteDate = new Date(Date.now() + 45 * 60 * 1000);
         this.exitTime = null;
     }

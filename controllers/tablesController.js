@@ -11,17 +11,14 @@ exports.findAll = asyncHandler(async (req, res)=> {
         
         const dataWithActiveInfo = tables.map(t => {
             const tableData = t.toJSON();
-            const activeTable = serverSocket.findTable(String(t.id));
-            if (activeTable) {
-                tableData.activeGameType = activeTable.gameType;
-            }
+            // Ensure the gameType from the database is used
+            tableData.gameType = t.gameType;
             return tableData;
         });
 
-        for (let i = 1; i <= tables.length; i++) {
-          
-          if (occupiedSeatsMap.get(i) === undefined) {
-            occupiedSeatsMap.set(i, 9);
+        for (const table of tables) {
+          if (occupiedSeatsMap.get(table.id) === undefined) {
+            occupiedSeatsMap.set(table.id, 0);
           }
         }
         
@@ -36,8 +33,27 @@ exports.findAll = asyncHandler(async (req, res)=> {
 
 exports.findById = asyncHandler(async (req, res)=> {
     try {
-        const tables = await Table.findByPk(req.params.id);
-        res.json({message: "table", data: tables});
+        const table = await Table.findByPk(req.params.id);
+        if (!table) {
+            return res.status(404).json({ message: 'Table not found' });
+        }
+        
+        const tableData = table.get({ plain: true }); 
+        
+        // Ensure gameType is always present, taking priority from DB record
+        if (!tableData.gameType) {
+             tableData.gameType = 'poker'; // Default
+        }
+        
+        const activeTable = serverSocket.findTable(String(table.id));
+        if (activeTable) {
+            // If active, use activeTable's type if available
+            tableData.gameType = activeTable.tableInfo.gameType || tableData.gameType;
+        }
+        
+        console.log(`[DEBUG] findById - Table ID: ${table.id}, Final gameType injected: ${tableData.gameType}`);
+        
+        res.json({message: "table", data: tableData});
     } catch (error) {
         console.error('[TABLES CONTROLLER ERROR]', error);
         res.status(500).json({ message: 'Server Error', error: error.message });   

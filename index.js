@@ -29,6 +29,7 @@ require('./model/RetraitCryptoMoney');
 require('./model/RetraitMobileMoney');
 require('./model/Soldes');
 require('./model/Table');
+require('./model/LudoGame');
 require('./model/TypeCryptoMoney');
 require('./model/User');
 sequelize.authenticate()
