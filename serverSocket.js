@@ -51,7 +51,7 @@ async function creditLudoEntry(userId, amount) {
     });
 }
 
-async function settleLudoWinner(table, winner) {
+async function settleLudoWinner(table, winner, options = {}) {
     const players = table.seats.filter(Boolean);
     const winnerSeat = players.find(seat => seat.userId === winner.user.id);
     if (!winnerSeat || players.length !== 2) throw new Error('Joueurs Ludo invalides');
@@ -80,6 +80,7 @@ async function settleLudoWinner(table, winner) {
         player.socketio.emit('ludoGameFinished', {
             ...result,
             isWinner,
+            endedByQuit: options.endedByQuit === true,
             updatedBalance: isWinner ? winnerBalance : loserBalance,
         });
     }
@@ -419,6 +420,13 @@ const serverSocket = (app) => {
 
                 if (!table) {
                     return socket.emit('joinError', { message: 'Table introuvable' });
+                }
+
+                // Ne pas considérer comme occupés les sièges persistés alors
+                // qu'aucun joueur Ludo n'est actuellement connecté.
+                if (isLudoGame(table.tableInfo.gameType)) {
+                    const cleaned = table.cleanupDisconnectedSeats();
+                    if (cleaned) await table.savePersistentState();
                 }
 
                 // Le montant de la table en base est la source de secours.
@@ -906,6 +914,10 @@ const serverSocket = (app) => {
                     for (const [sessionId, table] of sessionMap.entries()) {
                         if (table.players.has(socket.id)) {
                             const player = table.players.get(socket.id);
+                            if (isLudoGame(table.tableInfo?.gameType)) {
+                                table.removePlayer(socket.id);
+                                continue;
+                            }
                             console.log(`💀 Joueur ${player.user.id} déconnecté de la table ${tid}`);
 
                             // ✅ FIX : passer socket.id pour que handleDisconnect retrouve le joueur

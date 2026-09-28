@@ -40,6 +40,28 @@ class LudoTable {
         return this.maxSeats - this.seats.filter(Boolean).length;
     }
 
+    // Libérer les sièges restaurés en base alors qu'aucun socket joueur
+    // n'est connecté après un redémarrage du serveur.
+    cleanupDisconnectedSeats() {
+        const connectedUserIds = new Set(
+            [...this.players.values()].map((player) => Number(player.user?.id))
+        );
+        let changed = false;
+        this.seats = this.seats.map((seat) => {
+            if (!seat || connectedUserIds.has(Number(seat.userId))) return seat;
+            changed = true;
+            return null;
+        });
+
+        if (changed && this.players.size < this.minPlayers) {
+            this.gameStarted = false;
+            this.activeColor = this.players.size
+                ? [...this.players.values()][0]?.color || null
+                : null;
+        }
+        return changed;
+    }
+
     getPersistentState() {
         return {
             tableId: this.tableInfo.id,
@@ -213,7 +235,7 @@ class LudoTable {
 
             this.settling = true;
             try {
-                await this.onWinner(this, remainingPlayer);
+                await this.onWinner(this, remainingPlayer, { endedByQuit: true });
                 this.settled = true;
                 this.winnerId = Number(remainingPlayer.user.id);
             } finally {
